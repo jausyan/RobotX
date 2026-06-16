@@ -516,15 +516,20 @@ private:
       image_points.push_back(corner);
     }
 
-    const bool ok = cv::solvePnP(
-      object_points_,
-      image_points,
-      camera_matrix_,
-      dist_coeffs_,
-      rvec,
-      tvec,
-      false,
-      cv::SOLVEPNP_IPPE_SQUARE);
+    bool ok = false;
+    try {
+      ok = cv::solvePnP(
+        object_points_,
+        image_points,
+        camera_matrix_,
+        dist_coeffs_,
+        rvec,
+        tvec,
+        false,
+        cv::SOLVEPNP_IPPE_SQUARE);
+    } catch (const cv::Exception &) {
+      // degenerate corner geometry (e.g. near-edge-on tag) — skip this frame
+    }
     return ok;
   }
 

@@ -23,21 +23,19 @@ endif()
 add_executable(vision_video src/vision_video.cpp)
 ament_target_dependencies(vision_video rclcpp std_msgs geometry_msgs sensor_msgs)
 
-# Link 4.10 .so files directly (not via find_package imported target) so CMake does NOT
-# inject 4.10 includes as -isystem. Both include dirs are then plain -I, with 4.10 first,
-# ensuring the compiler uses 4.10 dnn.hpp (dnn4_v20240521) rather than 4.5 (dnn4_v20211004).
 target_include_directories(vision_video PRIVATE
   /home/el-system/.local/opencv-4.10/include/opencv4
-  /usr/include/opencv4
 )
 target_link_libraries(vision_video
   /home/el-system/.local/opencv-4.10/lib/libopencv_dnn.so
+  /home/el-system/.local/opencv-4.10/lib/libopencv_calib3d.so
+  /home/el-system/.local/opencv-4.10/lib/libopencv_features2d.so
+  /home/el-system/.local/opencv-4.10/lib/libopencv_flann.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_core.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_highgui.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_imgproc.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_videoio.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_imgcodecs.so
-  /usr/lib/x86_64-linux-gnu/libopencv_calib3d.so
 )
 # Burn 4.10 lib dir into the binary so the dynamic linker uses 4.10 at runtime
 set_target_properties(vision_video PROPERTIES

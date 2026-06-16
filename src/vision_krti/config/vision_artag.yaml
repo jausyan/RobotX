@@ -12,7 +12,7 @@ vision_artag_node:
     stream_height: 480
     stream_fps: 30
     stream_bitrate_kbps: 500
-    tag_id: -1
+    tag_id: 52
     tag_size_m: 0.2
     pose_frame_id: "camera"
     offset_x_m: 0.0
