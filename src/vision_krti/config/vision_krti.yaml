@@ -1,0 +1,30 @@
+vision_krti_node:
+  ros__parameters:
+    input_source: "/dev/video0"
+    input_width: 640
+    input_height: 480
+    show_window: true
+    window_name: "vision_krti_tag"
+    enable_stream: false
+    stream_host: "10.7.101.148"
+    stream_port: 5000
+    stream_width: 640
+    stream_height: 480
+    stream_fps: 30
+    stream_bitrate_kbps: 500
+    aruco.adaptive_thresh_win_size_min: 3
+    aruco.adaptive_thresh_win_size_max: 53
+    aruco.adaptive_thresh_win_size_step: 10
+    aruco.adaptive_thresh_constant: 7.0
+    aruco.min_marker_perimeter_rate: 0.02
+    aruco.max_marker_perimeter_rate: 4.0
+    aruco.polygonal_approx_accuracy_rate: 0.05
+    aruco.min_corner_distance_rate: 0.05
+    aruco.min_marker_distance_rate: 0.05
+    aruco.min_distance_to_border: 3
+    aruco.detect_inverted_marker: true
+    aruco.error_correction_rate: 0.6
+    aruco.corner_refine_method: 2
+    aruco.corner_refine_win_size: 5
+    aruco.corner_refine_max_iterations: 30
+    aruco.corner_refine_min_accuracy: 0.1

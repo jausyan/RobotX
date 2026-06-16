@@ -1,0 +1,24 @@
+/**:
+  ros__parameters:
+    gate_centering:
+      test_mode: true              
+      takeoff_altitude: 2.0
+      forward_distance: 3.0
+      gate_width: 1.5               
+      centering_tolerance: 0.15     
+      waypoint_tolerance: 0.3
+      control_mode: "velocity"      
+      max_velocity: 0.2             
+      proportional_gain: 0.5        
+      rotation_angle: 90.0          
+      
+      detection_range_min: 4.0      # Jarak minimum deteksi (meter) - LONG RANGE
+      detection_range_max: 8.0      # Jarak maksimum deteksi (meter) - LONG RANGE
+      roi_lateral: 3.0              # Lateral ROI width (meter) - lebih lebar untuk jarak jauh
+      cluster_epsilon: 0.15          
+      min_cluster_points: 5         # REDUCED untuk jarak jauh (point density lebih rendah)
+      min_pole_height: 0.5          
+      target_height: 0.75                    
+
+    
+      
