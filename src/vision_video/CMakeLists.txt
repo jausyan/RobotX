@@ -20,10 +20,14 @@ if(ENABLE_OPENVINO)
     PATHS /home/el-system/.local/lib/python3.10/site-packages/openvino/cmake
   )
 endif()
-add_executable(vision_video src/vision_video.cpp)
+add_executable(vision_video
+  src/vision_video.cpp
+  utils/vision_video_.cpp
+)
 ament_target_dependencies(vision_video rclcpp std_msgs geometry_msgs sensor_msgs)
 
 target_include_directories(vision_video PRIVATE
+  include
   /home/el-system/.local/opencv-4.10/include/opencv4
 )
 target_link_libraries(vision_video

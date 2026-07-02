@@ -1,0 +1,11 @@
+std_msgs/Header header
+int32    class_id
+string   label
+float32  confidence
+float32  pixel_u
+float32  pixel_v
+float64  latitude
+float64  longitude
+float64  altitude_m
+float32  north_offset_m
+float32  east_offset_m

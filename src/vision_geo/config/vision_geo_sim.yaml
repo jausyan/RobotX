@@ -1,0 +1,46 @@
+vision_geo_node:
+  ros__parameters:
+    # ── Camera input (Gazebo topic) ─────────────────────────────────────────────
+    input_mode: "topic"
+    input_source: "/iris_with_camera_2/camera/image_raw"
+    use_camera_info: true
+    camera_info_topic: "/iris_with_camera_2/camera/camera_info"
+
+    # ── Camera intrinsics (loaded from camera_info topic, these are fallback) ──
+    camera_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    distortion_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # ── Camera mount rotation ───────────────────────────────────────────────────
+    cam_to_body_rpy: [180.0, 0.0, 0.0]
+
+    # ── YOLO model ──────────────────────────────────────────────────────────────
+    model_path: "/home/el-system/robotX/models/buoys_1.onnx"
+    input_width: 320
+    input_height: 320
+    conf_threshold: 0.4
+    nms_threshold: 0.45
+    class_names: ["buoy"]
+
+    # ── MAVROS (use SITL if available, else use fixed pose for pure sim) ────────
+    gps_topic:     "/rian/global_position/global"
+    pose_topic:    "/rian/local_position/pose"
+    rel_alt_topic: "/rian/global_position/rel_alt"
+
+    # Set use_fixed_pose: true if running Gazebo without MAVROS SITL
+    use_fixed_pose: true
+    fixed_lat: -6.914744       # example KRTI arena coordinates
+    fixed_lon: 107.609810
+    fixed_altitude_m: 15.0
+
+    max_pose_age_ms: 500
+
+    # ── Output topics ───────────────────────────────────────────────────────────
+    output_topic:    "/vision_geo/detections"
+    marker_topic:    "/vision_geo/markers"
+    marker_frame_id: "map"
+    marker_lifetime_s: 30.0
+    marker_size: 0.8
+
+    # ── Display ─────────────────────────────────────────────────────────────────
+    show_window: true
+    window_name: "vision_geo_sim"

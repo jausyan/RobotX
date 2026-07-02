@@ -82,8 +82,8 @@ int main(int argc, char **argv) {
     }
     
     RCLCPP_INFO(node->get_logger(), "TAKING OFF.... %.2f meters...", takeoff_altitude);
-    takeoff(node, rate, posee, 15.0);
-    holdPosition(node, rate, posee, 30.0);
+    takeoff(node, rate, posee, 13.0);
+    holdPosition(node, rate, posee, 120.0);
 
     // RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
     // LocalMove(node, rate, posee, 3.0, 0.0, 0.0, 0.0, waypoint_tolerance);

@@ -1,6 +1,6 @@
 vision_artag_node:
   ros__parameters:
-    input_source: "/dev/video4"
+    input_source: "/dev/video0"
     input_width: 640
     input_height: 480
     show_window: true
