@@ -82,12 +82,20 @@ int main(int argc, char **argv) {
     }
     
     RCLCPP_INFO(node->get_logger(), "TAKING OFF.... %.2f meters...", takeoff_altitude);
-    takeoff(node, rate, posee, 13.0);
-    holdPosition(node, rate, posee, 120.0);
+    takeoff(node, rate, posee, 15.0);
+    holdPosition(node, rate, posee, 10.0);
 
-    // RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
-    // LocalMove(node, rate, posee, 3.0, 0.0, 0.0, 0.0, waypoint_tolerance);
-    // holdPosition(node, rate, posee, 5.0);
+    RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
+    LocalMove(node, rate, posee, 25.0, 0.0, 0.0, 0.0, waypoint_tolerance, false);
+    holdPosition(node, rate, posee, 5.0);
+
+    RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
+    LocalMove(node, rate, posee, 0.0, 5.0, 0.0, 0.0, waypoint_tolerance, false);
+    holdPosition(node, rate, posee, 5.0);
+
+    RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
+    LocalMove(node, rate, posee, -35.0, 0.0, 0.0, 0.0, waypoint_tolerance, false);
+    holdPosition(node, rate, posee, 5.0);
 
     // RCLCPP_INFO(node->get_logger(), "CENTERING ARTAG...");
     // bool status = false;
@@ -111,7 +119,7 @@ int main(int argc, char **argv) {
     // centering_tag(node, rate, 2000.0, 0.0, 10.0, 0.02, 120.0, true, 0.0);
     // holdPosition(node, rate, posee, 2.0);
 
-    setMode(node, rate, "AUTO.LAND");
+    setMode(node, rate, "rtl");
 
     // RCLCPP_INFO(node->get_logger(), "ROTATING... %.2f degrees...", 90.0);
     // rotateByDegrees(node, rate, posee, 90.0);

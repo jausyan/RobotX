@@ -24,6 +24,8 @@
 #include <std_msgs/msg/float32.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2_ros/transform_broadcaster.h>
 
 #include "vision_msgs/msg/detected_object.hpp"
 #include "vision_msgs/msg/detected_object_array.hpp"
@@ -46,10 +48,14 @@ public:
     double lat = 0.0;
     double lon = 0.0;
     double alt_agl = 0.0;
+    double x_local = 0.0;    // pose.position.x — North from home
+    double y_local = 0.0;    // pose.position.y — West from home (= -East; negate to get East)
+    double alt_local = 0.0;  // pose.position.z — Up from home
     double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
     rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
     bool gps_valid = false;
     bool pose_valid = false;
+    bool pose_z_valid = false;
   };
 
   struct GeoPoint
@@ -59,14 +65,35 @@ public:
     bool valid = false;
   };
 
-  struct AccumDetection
+  // Tracks a buoy currently visible in the frame (pixel space).
+  // GPS observations accumulate here; committed to the map when buoy exits.
+  // A buoy currently visible in the frame (pixel-space association).
+  // Buffers observations until confirmed, then links to a permanent map point.
+  struct ActiveTrack
   {
-    double lat, lon;
-    double north_m, east_m;   // relative to home
-    int class_id;
+    int         class_id;
     std::string label;
-    float confidence;
-    rclcpp::Time timestamp;
+    float       confidence = 0.0f;
+    float       cx = 0.0f, cy = 0.0f;              // last pixel center
+    std::vector<std::pair<double, double>> enu_buf; // (east_m, north_m) map coords, pre-link
+    int         frames_missing = 0;
+    int         linked_buoy_id = -1;               // -1 until confirmed & linked
+  };
+
+  // One entry per unique buoy in the GPS world map.
+  // Position = running mean of EVERY observation across all passes (converges in place).
+  struct BuoyMapPoint
+  {
+    int         buoy_id;
+    int         class_id;
+    std::string label;
+    double      sum_east = 0.0, sum_north = 0.0;   // accumulators
+    int         obs_count = 0;                     // total observations averaged in
+    double      east_m = 0.0, north_m = 0.0;       // = sum / obs_count (map ENU from home)
+    double      lat = 0.0, lon = 0.0;              // derived from east_m/north_m
+    int         sighting_count = 0;                // distinct passes that confirmed it
+    float       best_confidence = 0.0f;
+    rclcpp::Time last_seen{0, 0, RCL_ROS_TIME};
   };
 
 private:
@@ -99,6 +126,9 @@ private:
     const std::vector<Detection> & dets,
     const std::vector<GeoPoint> & geo,
     const rclcpp::Time & stamp);
+  // add one observation to a buoy's running mean and refresh derived fields
+  void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m,
+                            float confidence, const rclcpp::Time & stamp);
   void publishMarkers();
 
   // ── Display ──────────────────────────────────────────────────────────────────
@@ -171,8 +201,14 @@ private:
   double home_lon_ = 0.0;
   bool home_set_ = false;
 
-  std::vector<AccumDetection> accum_detections_;
-  int marker_id_counter_ = 0;
+  std::vector<ActiveTrack>  active_tracks_;
+  std::vector<BuoyMapPoint> buoy_map_;
+  int    next_buoy_id_ = 1;
+
+  double map_merge_radius_m_;
+  int    min_obs_to_commit_;    // min GPS frames in buffer before committing a track
+  int    track_exit_frames_;    // missed frames before track is committed
+  double pixel_match_radius_px_; // pixel center distance to match same buoy across frames
 
   // ── Topic-mode image buffer ──────────────────────────────────────────────────
   cv::Mat latest_frame_;
@@ -183,6 +219,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Publisher<vision_msgs::msg::DetectedObjectArray>::SharedPtr detections_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;

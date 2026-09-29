@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
     // centering_artag(node, rate, 0.75, status, 0.05, 0.20, 0.30, 0.0, 0.2, 2.5, 2.5, 0.0, 0.0, "local_pose", centering_tolerance);
     RCLCPP_INFO(node->get_logger(), "CORRECTING HEADING...");
     // reOrientation(node, rate, status, 2.0, 0.5, 30.0);
-    correct_heading_artag(node, rate, status, 3.0, 0.5, 20.0);
+    // correct_heading_artag(node, rate, status, 3.0, 0.5, 20.0);
     // CorrectHeading(node, rate, status, 3.0, 0.5, 20.0);
     // if (status) {
     //     RCLCPP_INFO(node->get_logger(), "Step 4: Correcting heading (Absolute)...");

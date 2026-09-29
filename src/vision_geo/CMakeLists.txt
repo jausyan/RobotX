@@ -15,6 +15,8 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(vision_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 add_executable(vision_geo
   src/vision_geo.cpp
@@ -28,6 +30,8 @@ ament_target_dependencies(vision_geo
   sensor_msgs
   visualization_msgs
   vision_msgs
+  tf2_ros
+  tf2_geometry_msgs
 )
 
 target_include_directories(vision_geo PRIVATE

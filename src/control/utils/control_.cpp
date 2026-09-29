@@ -2001,7 +2001,7 @@ void printTitik(std::vector<double>& lat_indoor, std::vector<double>& lon_indoor
     }
 }
 
-void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float forward_x, float left_y, float up_z, float yaw_angle, float tolerance) {
+void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float forward_x, float left_y, float up_z, float yaw_angle, float tolerance, bool auto_heading) {
     geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
     geometry_msgs::msg::PoseStamped target_pose = current_pose;
     float current_yaw = getHeading(current_pose.pose.orientation);
@@ -2013,14 +2013,43 @@ void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, 
     target_pose.pose.position.z = current_pose.pose.position.z + up_z;
     const double heading_eps = 1e-4;
     const bool has_translation = std::abs(global_x) > heading_eps || std::abs(global_y) > heading_eps;
-    if (yaw_angle != 0.0) {
+
+    if (!auto_heading) {
+        // Keep the current heading unchanged – do not touch orientation
+        target_pose.pose.orientation = current_pose.pose.orientation;
+        RCLCPP_INFO(node->get_logger(), "auto_heading=false: keeping current heading (%.2f deg)", current_yaw * 180.0 / M_PI);
+    } else if (yaw_angle != 0.0) {
+        // Explicit yaw override takes priority when auto_heading is true
         setHeading(target_pose.pose.orientation, yaw_angle);
+        RCLCPP_INFO(node->get_logger(), "auto_heading=true: using explicit yaw_angle=%.2f deg", yaw_angle * 180.0 / M_PI);
     } else if (has_translation) {
-        const double target_yaw = std::atan2(global_y, global_x);
-        setHeading(target_pose.pose.orientation, target_yaw);
+        // Snap to the nearest cardinal axis (+x=0, +y=90°, -x=180°, -y=-90°)
+        // that best matches the global movement direction
+        const double move_angle = std::atan2(global_y, global_x); // [-pi, pi]
+        // Candidate cardinal yaws (radians): 0, pi/2, pi/-pi, -pi/2
+        const double cardinals[4] = {0.0, M_PI / 2.0, M_PI, -M_PI / 2.0};
+        const char* cardinal_names[4] = {"+x (East)", "+y (North)", "-x (West)", "-y (South)"};
+        double best_yaw = cardinals[0];
+        double best_diff = std::numeric_limits<double>::max();
+        for (int i = 0; i < 4; ++i) {
+            double diff = std::abs(std::remainder(move_angle - cardinals[i], 2.0 * M_PI));
+            if (diff < best_diff) {
+                best_diff = diff;
+                best_yaw = cardinals[i];
+                RCLCPP_DEBUG(node->get_logger(), "  candidate %s diff=%.2f rad", cardinal_names[i], diff);
+            }
+        }
+        // Determine which cardinal was chosen for logging
+        const char* chosen_name = "+x (East)";
+        for (int i = 0; i < 4; ++i) {
+            if (std::abs(best_yaw - cardinals[i]) < 1e-9) { chosen_name = cardinal_names[i]; break; }
+        }
+        setHeading(target_pose.pose.orientation, best_yaw);
+        RCLCPP_INFO(node->get_logger(), "auto_heading=true: snapping to cardinal %s (%.2f deg)", chosen_name, best_yaw * 180.0 / M_PI);
     } else {
         target_pose.pose.orientation = current_pose.pose.orientation;
     }
+
     target_pose.header.stamp = node->now();
     target_pose.header.frame_id = "map";
     RCLCPP_INFO(node->get_logger(), "Moving from (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)", current_pose.pose.position.x, current_pose.pose.position.y, current_pose.pose.position.z, target_pose.pose.position.x, target_pose.pose.position.y, target_pose.pose.position.z);
@@ -2041,6 +2070,7 @@ void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, 
     }
     posee = node->getCurrentLocalPose();
 }
+
 
 // void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float forward_x, float left_y, float up_z, float yaw_angle, float tolerance, float step) {
 //     geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
@@ -2144,1908 +2174,6 @@ void rotateByDegrees(const std::shared_ptr<DroneController>&node, rclcpp::Rate &
     Rotate(node, rate, posee, radians);
 }
 
-void strafeRight(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, 
-                 geometry_msgs::msg::PoseStamped &posee, float distance, float tolerance) {
-    /**
-     * Strafe (move sideways) to the right relative to drone's current heading
-     * Positive distance moves to the right
-     */
-    RCLCPP_INFO(node->get_logger(), "Strafing RIGHT %.2f meters", distance);
-    
-    // Call LocalMove with negative left_y (right is negative left)
-    // forward_x = 0 (no forward/backward movement)
-    // left_y = -distance (negative = right)
-    // up_z = 0 (no altitude change)
-    // yaw_angle = 0 (keep current heading)
-    LocalMove(node, rate, posee, 0.0, -distance, 0.0, 0.0, tolerance);
-}
-
-void strafeLeft(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, 
-                geometry_msgs::msg::PoseStamped &posee, float distance, float tolerance) {
-    /**
-     * Strafe (move sideways) to the left relative to drone's current heading
-     * Positive distance moves to the left
-     */
-    RCLCPP_INFO(node->get_logger(), "Strafing LEFT %.2f meters", distance);
-    
-    // Call LocalMove with positive left_y
-    // forward_x = 0 (no forward/backward movement)
-    // left_y = +distance (positive = left)
-    // up_z = 0 (no altitude change)
-    // yaw_angle = 0 (keep current heading)
-    LocalMove(node, rate, posee, 0.0, distance, 0.0, 0.0, tolerance);
-}
-
-bool detectGatePosts(const std::shared_ptr<DroneController>&node, float &left_post_angle, 
-                     float &right_post_angle, float &left_post_distance, float &right_post_distance,
-                     float gate_width, float max_detection_range) {
-    /**
-     * Detect two gate posts using 2D lidar scan
-     * Algorithm:
-     * 1. Get lidar scan data
-     * 2. Find clusters of points (obstacles)
-     * 3. Identify two clusters that are approximately gate_width apart
-     * 4. Calculate angle and distance to each post
-     */
-    
-    sensor_msgs::msg::LaserScan scan = node->getCurrentLaserScan();
-    
-    if (scan.ranges.empty()) {
-        RCLCPP_WARN(node->get_logger(), "Lidar scan is empty!");
-        return false;
-    }
-    
-    // Find all obstacles (points closer than max_detection_range)
-    struct ObstaclePoint {
-        float angle;
-        float distance;
-        int index;
-    };
-    
-    std::vector<ObstaclePoint> obstacles;
-    
-    for (size_t i = 0; i < scan.ranges.size(); i++) {
-        float range = scan.ranges[i];
-        
-        // Filter out invalid readings and too far points
-        if (std::isfinite(range) && range > scan.range_min && 
-            range < scan.range_max && range < max_detection_range) {
-            
-            float angle = scan.angle_min + i * scan.angle_increment;
-            obstacles.push_back({angle, range, (int)i});
-        }
-    }
-    
-    if (obstacles.size() < 2) {
-        RCLCPP_WARN(node->get_logger(), "Not enough obstacles detected: %zu", obstacles.size());
-        return false;
-    }
-    
-    // Cluster obstacles to find distinct posts
-    // Simple clustering: find gaps in consecutive points
-    std::vector<std::vector<ObstaclePoint>> clusters;
-    std::vector<ObstaclePoint> current_cluster;
-    
-    float cluster_gap_threshold = 0.3; // 0.3 radians (~17 degrees) gap = new cluster (more sensitive)
-    
-    current_cluster.push_back(obstacles[0]);
-    
-    for (size_t i = 1; i < obstacles.size(); i++) {
-        float angle_diff = obstacles[i].angle - obstacles[i-1].angle;
-        
-        if (angle_diff > cluster_gap_threshold) {
-            // Start new cluster
-            if (current_cluster.size() >= 2) { // Minimum 2 points to be a valid post (more sensitive)
-                clusters.push_back(current_cluster);
-            }
-            current_cluster.clear();
-        }
-        current_cluster.push_back(obstacles[i]);
-    }
-    
-    // Don't forget the last cluster
-    if (current_cluster.size() >= 2) {
-        clusters.push_back(current_cluster);
-    }
-    
-    if (clusters.size() < 2) {
-        RCLCPP_WARN(node->get_logger(), "Only %zu cluster(s) detected, need at least 2 for gate posts", 
-                   clusters.size());
-        return false;
-    }
-    
-    // Find the centroid of each cluster (average position)
-    struct Post {
-        float angle;
-        float distance;
-        float x; // Cartesian x
-        float y; // Cartesian y
-    };
-    
-    std::vector<Post> posts;
-    
-    for (const auto& cluster : clusters) {
-        float avg_x = 0.0;
-        float avg_y = 0.0;
-        
-        for (const auto& point : cluster) {
-            avg_x += point.distance * cos(point.angle);
-            avg_y += point.distance * sin(point.angle);
-        }
-        
-        avg_x /= cluster.size();
-        avg_y /= cluster.size();
-        
-        float post_distance = sqrt(avg_x * avg_x + avg_y * avg_y);
-        float post_angle = atan2(avg_y, avg_x);
-        
-        posts.push_back({post_angle, post_distance, avg_x, avg_y});
-    }
-    
-    // Find two posts that are approximately gate_width apart
-    float best_match_error = std::numeric_limits<float>::max();
-    int best_left_idx = -1;
-    int best_right_idx = -1;
-    
-    for (size_t i = 0; i < posts.size(); i++) {
-        for (size_t j = i + 1; j < posts.size(); j++) {
-            // Calculate distance between posts
-            float dx = posts[j].x - posts[i].x;
-            float dy = posts[j].y - posts[i].y;
-            float distance_between = sqrt(dx * dx + dy * dy);
-            
-            // Check if distance matches gate_width (within 30% tolerance)
-            float error = fabs(distance_between - gate_width);
-            float tolerance_ratio = 0.3; // 30% tolerance
-            
-            if (error < gate_width * tolerance_ratio && error < best_match_error) {
-                best_match_error = error;
-                
-                // Determine left and right based on angle
-                if (posts[i].angle > posts[j].angle) {
-                    best_left_idx = i;
-                    best_right_idx = j;
-                } else {
-                    best_left_idx = j;
-                    best_right_idx = i;
-                }
-            }
-        }
-    }
-    
-    if (best_left_idx == -1 || best_right_idx == -1) {
-        RCLCPP_WARN(node->get_logger(), 
-                   "Could not find two posts matching gate width %.2f m (checked %zu posts)", 
-                   gate_width, posts.size());
-        return false;
-    }
-    
-    // Output the results
-    left_post_angle = posts[best_left_idx].angle;
-    left_post_distance = posts[best_left_idx].distance;
-    right_post_angle = posts[best_right_idx].angle;
-    right_post_distance = posts[best_right_idx].distance;
-    
-    float detected_width = sqrt(
-        pow(posts[best_left_idx].x - posts[best_right_idx].x, 2) +
-        pow(posts[best_left_idx].y - posts[best_right_idx].y, 2)
-    );
-    
-    RCLCPP_INFO(node->get_logger(), 
-               "Gate detected! Left: angle=%.2f° dist=%.2fm, Right: angle=%.2f° dist=%.2fm, Width=%.2fm",
-               left_post_angle * 180.0 / M_PI, left_post_distance,
-               right_post_angle * 180.0 / M_PI, right_post_distance,
-               detected_width);
-    
-    return true;
-}
-
-bool detectGatePostsNear(const std::shared_ptr<DroneController>&node, float &left_post_angle, 
-                         float &right_post_angle, float &left_post_distance, float &right_post_distance,
-                         float gate_width, float max_detection_range, 
-                         float forward_zone_min, float max_lateral_angle) {
-    /**
-     * Detect two gate posts using 2D lidar scan - PRIORITIZE NEAREST FORWARD GATE
-     * 
-     * NEW STRATEGY for handling multiple gates (side-by-side scenario):
-     * 1. Filter posts by forward zone (x > forward_zone_min)
-     * 2. Find all gate candidates matching gate_width
-     * 3. SCORE each gate based on forward alignment (angle to center)
-     * 4. Select gate with BEST alignment (closest to 0° heading)
-     * 
-     * This ensures drone always targets the gate directly in front,
-     * not the one on the side when multiple gates are present.
-     */
-    
-    sensor_msgs::msg::LaserScan scan = node->getCurrentLaserScan();
-    
-    if (scan.ranges.empty()) {
-        RCLCPP_WARN(node->get_logger(), "Lidar scan Kosongg!");
-        return false;
-    }
-    
-    // Find all obstacles (points closer than max_detection_range)
-    struct ObstaclePoint {
-        float angle;
-        float distance;
-        int index;
-    };
-    
-    std::vector<ObstaclePoint> obstacles;
-    
-    for (size_t i = 0; i < scan.ranges.size(); i++) {
-        float range = scan.ranges[i];
-        
-        // Filter out invalid readings and too far points
-        if (std::isfinite(range) && range > scan.range_min && 
-            range < scan.range_max && range < max_detection_range) {
-            
-            float angle = scan.angle_min + i * scan.angle_increment;
-            
-            // STRATEGY 1: Filter by forward zone
-            float x = range * cos(angle);
-            if (x > forward_zone_min) {  // Only consider obstacles in forward zone
-                obstacles.push_back({angle, range, (int)i});
-            }
-        }
-    }
-    
-    if (obstacles.size() < 2) {
-        RCLCPP_WARN(node->get_logger(), "Not enough obstacles in forward zone: %zu", obstacles.size());
-        return false;
-    }
-    
-    // Cluster obstacles to find distinct posts
-    std::vector<std::vector<ObstaclePoint>> clusters;
-    std::vector<ObstaclePoint> current_cluster;
-    
-    // PHASE 1 FIX: Reduced threshold for better detection when close to gate
-    float cluster_gap_threshold = 0.2; // 0.2 radians (~11.5 degrees) gap = new cluster (was 0.3)
-    
-    current_cluster.push_back(obstacles[0]);
-    
-    for (size_t i = 1; i < obstacles.size(); i++) {
-        float angle_diff = obstacles[i].angle - obstacles[i-1].angle;
-        
-        if (angle_diff > cluster_gap_threshold) {
-            // Start new cluster
-            if (current_cluster.size() >= 2) {
-                clusters.push_back(current_cluster);
-            }
-            current_cluster.clear();
-        }
-        current_cluster.push_back(obstacles[i]);
-    }
-    
-    // Don't forget the last cluster
-    if (current_cluster.size() >= 2) {
-        clusters.push_back(current_cluster);
-    }
-    
-    if (clusters.size() < 2) {
-        RCLCPP_WARN(node->get_logger(), "Only %zu cluster(s) detected in forward zone, need at least 2 for gate posts", 
-                   clusters.size());
-        return false;
-    }
-    
-    // Calculate centroid of each cluster
-    struct Post {
-        float angle;
-        float distance;
-        float x; // Cartesian x (forward)
-        float y; // Cartesian y (lateral)
-    };
-    
-    std::vector<Post> posts;
-    
-    for (const auto& cluster : clusters) {
-        float avg_x = 0.0;
-        float avg_y = 0.0;
-        
-        for (const auto& point : cluster) {
-            avg_x += point.distance * cos(point.angle);
-            avg_y += point.distance * sin(point.angle);
-        }
-        
-        avg_x /= cluster.size();
-        avg_y /= cluster.size();
-        
-        float post_distance = sqrt(avg_x * avg_x + avg_y * avg_y);
-        float post_angle = atan2(avg_y, avg_x);
-        
-        posts.push_back({post_angle, post_distance, avg_x, avg_y});
-    }
-    
-    // STRATEGY 2: Find gate candidates and score them by forward alignment
-    struct GateCandidate {
-        int left_idx;
-        int right_idx;
-        float center_angle;      // Angle to gate center (0° = straight ahead)
-        float forward_distance;  // Average forward distance (x coordinate)
-        float width_error;       // Error from expected gate_width
-        float alignment_score;   // Lower is better (closer to 0° heading)
-    };
-    
-    std::vector<GateCandidate> gate_candidates;
-    
-    for (size_t i = 0; i < posts.size(); i++) {
-        for (size_t j = i + 1; j < posts.size(); j++) {
-            // Calculate distance between posts
-            float dx = posts[j].x - posts[i].x;
-            float dy = posts[j].y - posts[i].y;
-            float distance_between = sqrt(dx * dx + dy * dy);
-            
-            // PHASE 1 FIX: Increased tolerance for better detection when close to gate
-            // Check if distance matches gate_width (within 50% tolerance, was 30%)
-            float width_error = fabs(distance_between - gate_width);
-            float tolerance_ratio = 0.5; // 50% tolerance (was 0.3)
-            
-            if (width_error < gate_width * tolerance_ratio) {
-                // Valid gate candidate found
-                
-                // Calculate gate center
-                float center_x = (posts[i].x + posts[j].x) / 2.0;
-                float center_y = (posts[i].y + posts[j].y) / 2.0;
-                float center_angle = atan2(center_y, center_x);
-                
-                // Calculate forward distance (average x)
-                float forward_dist = (posts[i].x + posts[j].x) / 2.0;
-                
-                // STRATEGY 3: Score based on forward alignment
-                // Lower score = better (gate more aligned with heading)
-                float alignment_score = fabs(center_angle);
-                
-                // Skip gates that are too far to the side
-                if (alignment_score > max_lateral_angle) {
-                    continue;  // Gate is too much to the side, skip it
-                }
-                
-                // Determine left and right based on angle
-                int left_idx, right_idx;
-                if (posts[i].angle > posts[j].angle) {
-                    left_idx = i;
-                    right_idx = j;
-                } else {
-                    left_idx = j;
-                    right_idx = i;
-                }
-                
-                gate_candidates.push_back({
-                    left_idx, 
-                    right_idx, 
-                    center_angle, 
-                    forward_dist,
-                    width_error, 
-                    alignment_score
-                });
-            }
-        }
-    }
-    
-    if (gate_candidates.empty()) {
-        RCLCPP_WARN(node->get_logger(), 
-                   "Gaada point cloud yang bisa di cluster %.2f m depan kosong, gate gakedetek (checked %zu posts)", 
-                   gate_width, posts.size());
-        return false;
-    }
-    
-    // STRATEGY 4: Select gate with BEST forward alignment (lowest alignment_score)
-    auto best_gate = std::min_element(gate_candidates.begin(), gate_candidates.end(),
-        [](const GateCandidate& a, const GateCandidate& b) {
-            return a.alignment_score < b.alignment_score;
-        });
-    
-    // Output the results
-    left_post_angle = posts[best_gate->left_idx].angle;
-    left_post_distance = posts[best_gate->left_idx].distance;
-    right_post_angle = posts[best_gate->right_idx].angle;
-    right_post_distance = posts[best_gate->right_idx].distance;
-    
-    float detected_width = sqrt(
-        pow(posts[best_gate->left_idx].x - posts[best_gate->right_idx].x, 2) +
-        pow(posts[best_gate->left_idx].y - posts[best_gate->right_idx].y, 2)
-    );
-    
-    RCLCPP_INFO(node->get_logger(), 
-               "NEAREST FORWARD GATE detected! Left: angle=%.2f° dist=%.2fm, Right: angle=%.2f° dist=%.2fm, Width=%.2fm, Center angle=%.2f° (selected from %zu candidates)",
-               left_post_angle * 180.0 / M_PI, left_post_distance,
-               right_post_angle * 180.0 / M_PI, right_post_distance,
-               detected_width, best_gate->center_angle * 180.0 / M_PI, gate_candidates.size());
-    
-    return true;
-}
-
-
-void centering_gate(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    geometry_msgs::msg::PoseStamped &posee,
-    float gate_width,
-    float tolerance,
-    bool &status,
-    float max_velocity,
-    float proportional_gain,
-    float max_time,
-    bool yaw_alignment_enabled,
-    bool test_mode)
-{
-    if (test_mode) {
-        RCLCPP_INFO(node->get_logger(), "===== CENTERING TEST MODE =====");
-    } else {
-        RCLCPP_INFO(node->get_logger(), "===== STARTING GATE CENTERING =====");
-    }
-    RCLCPP_INFO(node->get_logger(), "Expected gate width: %.2fm, Tolerance: %.3fm", 
-                gate_width, tolerance);
-    if (!test_mode) {
-        RCLCPP_INFO(node->get_logger(), "WARNING: THIS IS NOT A TEST!");
-    }
-    
-    float detection_range_min = 1.5f;
-    float detection_range_max = 2.5f;
-    float roi_lateral = 2.0f;
-    int min_cluster_points = 2;
-    node->get_parameter("gate_centering.detection_range_min", detection_range_min);
-    node->get_parameter("gate_centering.detection_range_max", detection_range_max);
-    node->get_parameter("gate_centering.roi_lateral", roi_lateral);
-    node->get_parameter("gate_centering.min_cluster_points", min_cluster_points);
-    const float x_min = detection_range_min;  
-    const float x_max = detection_range_max;  
-    const float y_min = -roi_lateral;         
-    const float y_max = roi_lateral;          
-    const float z_min = 0.0f;  
-    const float z_max = 3.0f;  
-    const int num_bins = 60;  
-    const float bin_size = (y_max - y_min) / num_bins;
-    const double yaw_tolerance = 4.0 * M_PI / 180.0;
-    const double yaw_gain = 0.5;
-    const double max_yaw_rate = 0.6;
-    const int min_points_per_pole = min_cluster_points;  
-    const float gate_width_min = 0.8f;  
-    const float gate_width_max = 2.5f;  
-    RCLCPP_INFO(node->get_logger(), "ROI: X[%.1f-%.1fm] Y[%.1f-%.1fm] Z[%.1f-%.1fm]", x_min, x_max, y_min, y_max, z_min, z_max);
-    RCLCPP_INFO(node->get_logger(), "Grid: %d bins %.2fm, Min points/pole: %d", num_bins, bin_size, min_points_per_pole);
-    sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud = nullptr;
-    
-    auto lidar_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/livox/lidar", 10,
-        [&latest_cloud](const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-            latest_cloud = msg;
-        });
-
-    auto start_time = node->now();
-    int consecutive_centered_count = 0;
-    const int required_centered_frames = 1; 
-    status = false;
-    bool yaw_aligned = !yaw_alignment_enabled;
-    
-    geometry_msgs::msg::PoseStamped initial_pose = node->getCurrentLocalPose();
-    float initial_z = initial_pose.pose.position.z;
-
-    geometry_msgs::msg::PoseStamped hold_pose = initial_pose;
-    auto publish_hold_pose = [&node](const geometry_msgs::msg::PoseStamped &pose) {
-        geometry_msgs::msg::PoseStamped hold_cmd = pose;
-        hold_cmd.header.stamp = node->now();
-        hold_cmd.header.frame_id = "map";
-        node->publishLocalPosition(hold_cmd);
-    };
-    auto refresh_hold_pose = [&hold_pose](const geometry_msgs::msg::PoseStamped &pose) {
-        hold_pose = pose;
-        hold_pose.header.frame_id = "map";
-    };
-    
-    while (rclcpp::ok()) {
-        auto elapsed = (node->now() - start_time).seconds();
-        if (elapsed > max_time) {
-            RCLCPP_ERROR(node->get_logger(), "Gate centering timeout after %.1fs", elapsed);
-            break;
-        }
-        
-        if (!latest_cloud || latest_cloud->width == 0) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 2000, "Waiting for Livox PointCloud2 data on /livox/lidar...");
-            if (!test_mode) {
-                publish_hold_pose(hold_pose);
-            }
-            
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-    int bins[num_bins] = {0};  
-    double bin_x_sum[num_bins] = {0.0};
-        int total_roi_points = 0;
-        
-        sensor_msgs::PointCloud2ConstIterator<float> iter_x(*latest_cloud, "x");
-        sensor_msgs::PointCloud2ConstIterator<float> iter_y(*latest_cloud, "y");
-        sensor_msgs::PointCloud2ConstIterator<float> iter_z(*latest_cloud, "z");
-        size_t num_points = latest_cloud->width * latest_cloud->height;
-        
-        for (size_t i = 0; i < num_points; ++i, ++iter_x, ++iter_y, ++iter_z) {
-            float x = *iter_x;
-            float y = *iter_y;
-            float z = *iter_z;
-            if (std::isnan(x) || std::isnan(y) || std::isnan(z)) continue;
-
-            if (x >= x_min && x <= x_max &&
-                y >= y_min && y <= y_max &&
-                z >= z_min && z <= z_max) {
-                
-                int bin_idx = static_cast<int>((y - y_min) / bin_size);
-
-                if (bin_idx >= 0 && bin_idx < num_bins) {
-                    bins[bin_idx]++;
-                    bin_x_sum[bin_idx] += x;
-                    total_roi_points++;
-                }
-            }
-        }
-        
-        if (total_roi_points < min_points_per_pole * 2) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "Insufficient points in ROI: %d (need %d)", total_roi_points, min_points_per_pole * 2);
-            if (!test_mode) {
-                publish_hold_pose(hold_pose);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        int first_peak_idx = -1;
-        int first_peak_count = 0;
-        
-        for (int i = 0; i < num_bins; i++) {
-            if (bins[i] > first_peak_count) {
-                first_peak_count = bins[i];
-                first_peak_idx = i;
-            }
-        }
-        
-        if (first_peak_count < min_points_per_pole) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "First peak too weak: %d points (need %d)", first_peak_count, min_points_per_pole);
-            if (!test_mode) {
-                publish_hold_pose(hold_pose);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-    
-        int second_peak_idx = -1;
-        int second_peak_count = 0;
-        const int min_peak_separation = 10;  
-        
-        for (int i = 0; i < num_bins; i++) {
-            if (std::abs(i - first_peak_idx) < min_peak_separation) continue;
-            if (bins[i] > second_peak_count) {
-                second_peak_count = bins[i];
-                second_peak_idx = i;
-            }
-        }
-        
-        if (second_peak_count < min_points_per_pole) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "Second peak too weak: %d points (need %d)", second_peak_count, min_points_per_pole);
-            if (!test_mode) {
-                publish_hold_pose(hold_pose);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        int left_idx = (first_peak_idx < second_peak_idx) ? first_peak_idx : second_peak_idx;
-        int right_idx = (first_peak_idx < second_peak_idx) ? second_peak_idx : first_peak_idx;
-    float left_y = y_min + (left_idx + 0.5f) * bin_size;  
-    float right_y = y_min + (right_idx + 0.5f) * bin_size;
-    float detected_width = right_y - left_y;
-    double left_x_mean = bins[left_idx] > 0 ? bin_x_sum[left_idx] / bins[left_idx] : 0.0;
-    double right_x_mean = bins[right_idx] > 0 ? bin_x_sum[right_idx] / bins[right_idx] : 0.0;
-    double yaw_error = yaw_alignment_enabled
-        ? std::atan2(left_x_mean - right_x_mean, std::max(static_cast<double>(detected_width), 1e-3))
-        : 0.0;
-
-        if (detected_width < gate_width_min || detected_width > gate_width_max) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "Invalid gate width: %.2fm (expected %.2f-%.2fm)", detected_width, gate_width_min, gate_width_max);
-            if (!test_mode) {
-                publish_hold_pose(hold_pose);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-
-        float center_y = (left_y + right_y) / 2.0f;
-        float lateral_error = center_y;  
-        if (!yaw_aligned && std::abs(yaw_error) < yaw_tolerance) {
-            yaw_aligned = true;
-        }
-    bool is_centered = (std::abs(lateral_error) < tolerance) && (!yaw_alignment_enabled || std::abs(yaw_error) < yaw_tolerance);
-        if (is_centered) {
-            yaw_aligned = true;
-            consecutive_centered_count++;
-            if (test_mode) {
-                RCLCPP_INFO(node->get_logger(), "CENTERED! Frame %d/%d | Gate[L:%.2fm R:%.2fm W:%.2fm] | Offset:%.3fm | YawErr:%.2fdeg", consecutive_centered_count, required_centered_frames, left_y, right_y, detected_width, lateral_error, yaw_error * 180.0 / M_PI);
-            } else {
-                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "CENTERED! Frame %d/%d | Gate: [L:%.2fm R:%.2fm W:%.2fm] | Err: %.3fm | YawErr: %.2fdeg | Pts[L:%d R:%d]", consecutive_centered_count, required_centered_frames, left_y, right_y, detected_width, lateral_error, yaw_error * 180.0 / M_PI, bins[left_idx], bins[right_idx]);
-            }
-
-            if (!test_mode) {
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                refresh_hold_pose(current_pose);
-                publish_hold_pose(hold_pose);
-            }
-            
-            if (consecutive_centered_count >= required_centered_frames) {
-                if (test_mode) {
-                    RCLCPP_INFO(node->get_logger(), "TEST MODE SUCCESSFUL!");
-                } else {
-                    RCLCPP_INFO(node->get_logger(), "GATE CENTERING SUCCESSFUL!");
-                }
-                status = true;
-                break;
-            }
-        } else {
-            consecutive_centered_count = 0;     
-            float target_velocity_body_y = proportional_gain * lateral_error; 
-            target_velocity_body_y = std::max(-max_velocity, std::min(max_velocity, target_velocity_body_y));
-            double target_yaw_rate = 0.0;
-            if (!yaw_aligned) {
-                target_yaw_rate = std::max(-max_yaw_rate, std::min(max_yaw_rate, yaw_gain * yaw_error));
-            }
-            if (test_mode) {
-                std::string direction = (lateral_error > 0) ? "RIGHT" : "LEFT";
-                RCLCPP_INFO(node->get_logger(), "NOT CENTERED | Gate[L:%.2fm R:%.2fm W:%.2fm] | Offset:%.3fm %s | Vel:%.3fm/s | YawErr:%.2fdeg", left_y, right_y, detected_width, lateral_error, direction.c_str(), target_velocity_body_y, yaw_error * 180.0 / M_PI);
-            }
-        
-            if (!test_mode) {
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                refresh_hold_pose(current_pose);
-                float current_yaw = getHeading(current_pose.pose.orientation);
-                float vx_body = 0.0;  
-                float vy_body = target_velocity_body_y;
-                float vx_global = vx_body * cos(current_yaw) - vy_body * sin(current_yaw);
-                float vy_global = vx_body * sin(current_yaw) + vy_body * cos(current_yaw);
-                float altitude_error = initial_z - current_pose.pose.position.z;
-                float vz_global = 0.0;
-                if (std::abs(altitude_error) > 0.1f) {
-                    vz_global = 0.3f * altitude_error; 
-                    vz_global = std::max(-0.2f, std::min(0.2f, vz_global));
-                }
-                
-                geometry_msgs::msg::TwistStamped twist_cmd;
-                twist_cmd.header.stamp = node->now();
-                twist_cmd.header.frame_id = "map";  
-                twist_cmd.twist.linear.x = vx_global;
-                twist_cmd.twist.linear.y = vy_global;
-                twist_cmd.twist.linear.z = vz_global;
-                twist_cmd.twist.angular.z = target_yaw_rate;
-                
-                node->publishLocalVelocity(twist_cmd);
-                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "Centering: Gate[L:%.2f R:%.2f W:%.2fm] | Err:%.3fm | Vel_body_y:%.3f | YawErr:%.2fdeg | Vel_map[x:%.3f y:%.3f] | Yaw:%.1f° | Pts[L:%d R:%d]", left_y, right_y, detected_width, lateral_error, target_velocity_body_y, yaw_error * 180.0 / M_PI, vx_global, vy_global, current_yaw * 180.0 / M_PI, bins[left_idx], bins[right_idx]);
-            }
-        }
-        
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-    
-    if (!test_mode) {
-        geometry_msgs::msg::PoseStamped final_pose = node->getCurrentLocalPose();
-        refresh_hold_pose(final_pose);
-        publish_hold_pose(hold_pose);
-    }
-    
-    if (status) {
-        if (test_mode) {
-            RCLCPP_INFO(node->get_logger(), "\n=== TEST MODE COMPLETED ===");
-        } else {
-            RCLCPP_INFO(node->get_logger(), "=== GATE CENTERING COMPLETED ===");
-        }
-    } else {
-        if (test_mode) {
-            RCLCPP_ERROR(node->get_logger(), "\n=== TEST MODE FAILED ===");
-        } else {
-            RCLCPP_ERROR(node->get_logger(), "=== GATE CENTERING FAILED ===");
-        }
-    }
-}
-
-void centering_tag(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    float step,
-    float offset,
-    float close_threshold,
-    float max_velocity,
-    float timeout_sec,
-    bool downward_camera,
-    float min_velocity)
-{
-    if (step <= 0.0f) {
-        RCLCPP_ERROR(node->get_logger(), "centering_tag: step must be > 0");
-        return;
-    }
-
-    std_msgs::msg::Float64MultiArray::SharedPtr latest_tag_msg = nullptr;
-    auto tag_sub = node->create_subscription<std_msgs::msg::Float64MultiArray>(
-        "/tag_pose",
-        10,
-        [&latest_tag_msg](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
-            latest_tag_msg = msg;
-        });
-
-    (void)tag_sub;
-    const auto start_time = node->now();
-    bool ever_detected = false;
-    geometry_msgs::msg::PoseStamped hold_pose = node->getCurrentLocalPose();
-    float target_z = hold_pose.pose.position.z;
-    const float tolerance_px = close_threshold;
-    auto publish_hold_pose = [&node](const geometry_msgs::msg::PoseStamped &pose) {
-        geometry_msgs::msg::PoseStamped hold_cmd = pose;
-        hold_cmd.header.stamp = node->now();
-        hold_cmd.header.frame_id = "map";
-        node->publishLocalPosition(hold_cmd);
-    };
-    auto refresh_hold_pose = [&hold_pose, &target_z](const geometry_msgs::msg::PoseStamped &pose) {
-        hold_pose = pose;
-        hold_pose.pose.position.z = target_z;
-        hold_pose.header.frame_id = "map";
-    };
-    geometry_msgs::msg::TwistStamped cmd_vel;
-    geometry_msgs::msg::TwistStamped last_cmd_vel;
-    bool have_last_cmd = false;
-    float filtered_err_x = 0.0f;
-    float filtered_err_y = 0.0f;
-    bool have_filtered = false;
-    const float filter_alpha = 0.2f;
-    const float max_accel = std::max(0.02f, max_velocity);
-
-    RCLCPP_INFO(node->get_logger(),
-                "centering_tag params: step=%.1f px/(m/s), close_threshold=%.1f px, max_vel=%.2f, min_vel=%.2f, offset=%.2f, downward_camera=%s",
-                step, tolerance_px, max_velocity, min_velocity, offset, downward_camera ? "true" : "false");
-    RCLCPP_INFO(node->get_logger(), "centering_tag: waiting for /tag_pose...");
-    while (rclcpp::ok()) {
-        if ((node->now() - start_time).seconds() > timeout_sec) {
-            RCLCPP_WARN(node->get_logger(), "centering_tag: timeout after %.1f sec", timeout_sec);
-            break;
-        }
-
-        if (!latest_tag_msg) {
-            publish_hold_pose(hold_pose);
-            RCLCPP_INFO_THROTTLE(
-                node->get_logger(), *node->get_clock(), 1000,
-                "centering_tag: target not detected, holding position");
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-
-        if (latest_tag_msg->data.size() < 3) {
-            publish_hold_pose(hold_pose);
-            RCLCPP_WARN_THROTTLE(
-                node->get_logger(), *node->get_clock(), 1000,
-                "centering_tag: /tag_pose data must contain [x, y, center_dist], got %zu",
-                latest_tag_msg->data.size());
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-
-        const float x = static_cast<float>(latest_tag_msg->data[0]);
-        const float y = static_cast<float>(latest_tag_msg->data[1]);
-        const float center_dist = static_cast<float>(latest_tag_msg->data[2]);
-        const bool detected_now =
-            std::isfinite(x) && std::isfinite(y) && std::isfinite(center_dist) &&
-            (std::abs(x) > 1e-4f || std::abs(y) > 1e-4f || std::abs(center_dist) > 1e-4f);
-
-        if (detected_now) {
-            ever_detected = true;
-        }
-
-        if (!ever_detected) {
-            publish_hold_pose(hold_pose);
-            RCLCPP_INFO_THROTTLE(
-                node->get_logger(), *node->get_clock(), 1000,
-                "centering_tag: waiting for first valid target, holding position");
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-        refresh_hold_pose(current_pose);
-
-        const float cam_err_x = x - offset;
-        const float cam_err_y = y - offset;
-        float body_err_x = cam_err_x;
-        float body_err_y = cam_err_y;
-        if (downward_camera) {
-            body_err_x = -cam_err_y;
-            body_err_y = -cam_err_x;
-        }
-
-        const float pos_error = std::hypot(body_err_x, body_err_y);
-
-        if (pos_error <= tolerance_px) {
-            publish_hold_pose(hold_pose);
-            RCLCPP_INFO(node->get_logger(), "CENTEREDD...!! (pos_error=%.2f px)", pos_error);
-            break;
-        }
-
-        if (!have_filtered) {
-            filtered_err_x = body_err_x;
-            filtered_err_y = body_err_y;
-            have_filtered = true;
-        } else {
-            filtered_err_x = filter_alpha * body_err_x + (1.0f - filter_alpha) * filtered_err_x;
-            filtered_err_y = filter_alpha * body_err_y + (1.0f - filter_alpha) * filtered_err_y;
-        }
-
-        const float effective_min_velocity = (pos_error <= tolerance_px * 2.0f) ? 0.0f : min_velocity;
-        cmd_vel.twist.linear.x = applyPrecisionStep(filtered_err_x / step, effective_min_velocity, max_velocity);
-        cmd_vel.twist.linear.y = applyPrecisionStep(filtered_err_y / step, effective_min_velocity, max_velocity);
-        const float z_error = target_z - current_pose.pose.position.z;
-        float vz_hold = 0.3f * z_error;
-        vz_hold = std::max(-0.3f, std::min(0.3f, vz_hold));
-        cmd_vel.twist.linear.z = vz_hold;
-
-        if (have_last_cmd) {
-            cmd_vel = limitDelta(max_accel / RATE, cmd_vel, last_cmd_vel);
-        }
-        last_cmd_vel = cmd_vel;
-        have_last_cmd = true;
-        node->publishLocalVelocity(cmd_vel);
-
-        RCLCPP_INFO_THROTTLE(
-            node->get_logger(), *node->get_clock(), 800,
-            "centering_tag: cam(x,y)=(%.1f,%.1f) body_err=(%.1f,%.1f) pos_err=%.1f px vx=%.3f vy=%.3f",
-            x, y, body_err_x, body_err_y, pos_error, cmd_vel.twist.linear.x, cmd_vel.twist.linear.y);
-
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-}
-
-void centeringGateLivoxSimple(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    geometry_msgs::msg::PoseStamped &posee,
-    float gate_width,
-    float tolerance,
-    bool &status,
-    float max_velocity,
-    float proportional_gain,
-    float max_time,
-    bool test_mode)
-{
-    if (test_mode) {
-        RCLCPP_INFO(node->get_logger(), "=== LIVOX CENTERING TEST MODE ===");
-    } else {
-        RCLCPP_INFO(node->get_logger(), "=== Starting SIMPLE Livox Gate Centering ===");
-    }
-    RCLCPP_INFO(node->get_logger(), "Expected gate width: %.2fm, Tolerance: %.3fm", 
-                gate_width, tolerance);
-    if (!test_mode) {
-        RCLCPP_INFO(node->get_logger(), "Strategy: Grid binning + peak detection (O(n) complexity)");
-    }
-    
-    // Read ROI parameters from config (allows dynamic adjustment without recompile!)
-    float detection_range_min = 1.5f;
-    float detection_range_max = 2.5f;
-    float roi_lateral = 2.0f;
-    int min_cluster_points = 10;
-    
-    node->get_parameter("gate_centering.detection_range_min", detection_range_min);
-    node->get_parameter("gate_centering.detection_range_max", detection_range_max);
-    node->get_parameter("gate_centering.roi_lateral", roi_lateral);
-    node->get_parameter("gate_centering.min_cluster_points", min_cluster_points);
-    
-    // ROI parameters - NOW FROM CONFIG!
-    const float x_min = detection_range_min;  // Forward distance min
-    const float x_max = detection_range_max;  // Forward distance max
-    const float y_min = -roi_lateral;         // Lateral min (left)
-    const float y_max = roi_lateral;          // Lateral max (right)
-    const float z_min = 0.0f;  // Height min
-    const float z_max = 3.0f;  // Height max (increased for long range)
-    
-    // Grid binning parameters - ADAPTIVE
-    const int num_bins = 60;  // More bins for better resolution
-    const float bin_size = (y_max - y_min) / num_bins;
-    const int min_points_per_pole = min_cluster_points;  // FROM CONFIG!
-    
-    // Gate validation parameters - MORE TOLERANT for long range
-    const float gate_width_min = 0.8f;  // More tolerant
-    const float gate_width_max = 2.5f;  // More tolerant
-    
-    RCLCPP_INFO(node->get_logger(), "ROI: X[%.1f-%.1fm] Y[%.1f-%.1fm] Z[%.1f-%.1fm]",
-                x_min, x_max, y_min, y_max, z_min, z_max);
-    RCLCPP_INFO(node->get_logger(), "Grid: %d bins %.2fm, Min points/pole: %d",
-                num_bins, bin_size, min_points_per_pole);
-    
-    // Subscribe to Livox LiDAR data (PointCloud2)
-    sensor_msgs::msg::PointCloud2::SharedPtr latest_cloud = nullptr;
-    
-    auto lidar_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/livox/lidar", 10,
-        [&latest_cloud](const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-            latest_cloud = msg;
-        });
-    
-    RCLCPP_INFO(node->get_logger(), "Subscribing to Livox PointCloud2 on /livox/lidar");
-
-    // Centering control variables
-    auto start_time = node->now();
-    int consecutive_centered_count = 0;
-    const int required_centered_frames = 10; // 1 second at 10Hz
-    status = false;
-    
-    // Get initial altitude for stability
-    geometry_msgs::msg::PoseStamped initial_pose = node->getCurrentLocalPose();
-    float initial_z = initial_pose.pose.position.z;
-    
-    // ArduPilot: Prepare hold position for streaming when waiting
-    geometry_msgs::msg::PoseStamped hold_pose = initial_pose;
-    
-    while (rclcpp::ok()) {
-        // Check timeout
-        auto elapsed = (node->now() - start_time).seconds();
-        if (elapsed > max_time) {
-            RCLCPP_ERROR(node->get_logger(), "Gate centering timeout after %.1fs", elapsed);
-            break;
-        }
-        
-        if (!latest_cloud || latest_cloud->width == 0) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 2000,
-                "Waiting for Livox PointCloud2 data on /livox/lidar...");
-            
-            // ArduPilot: Stream setpoint to maintain position while waiting
-            if (!test_mode) {
-                hold_pose = node->getCurrentLocalPose();
-                hold_pose.header.stamp = node->now();
-                node->publishLocalPosition(hold_pose);
-            }
-            
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        // ===== STEP 1: Extract and filter points by ROI using PointCloud2 =====
-        
-        // PointCloud2 structure:
-        // - header: std_msgs/Header
-        // - height: uint32 (1 for unordered)
-        // - width: uint32 (number of points)
-        // - fields: PointField[] (x, y, z, intensity, etc.)
-        // - is_bigendian: bool
-        // - point_step: uint32 (size of one point in bytes)
-        // - row_step: uint32 (width * point_step)
-        // - data: uint8[] (actual point data)
-        
-        // ===== STEP 2: Grid binning - count points per lateral bin =====
-        
-        int bins[num_bins] = {0};  // Initialize all bins to 0
-        int total_roi_points = 0;
-        
-        // Create iterators for x, y, z fields
-        sensor_msgs::PointCloud2ConstIterator<float> iter_x(*latest_cloud, "x");
-        sensor_msgs::PointCloud2ConstIterator<float> iter_y(*latest_cloud, "y");
-        sensor_msgs::PointCloud2ConstIterator<float> iter_z(*latest_cloud, "z");
-        
-        // Get total number of points
-        size_t num_points = latest_cloud->width * latest_cloud->height;
-        
-        for (size_t i = 0; i < num_points; ++i, ++iter_x, ++iter_y, ++iter_z) {
-            
-            float x = *iter_x;
-            float y = *iter_y;
-            float z = *iter_z;
-            
-            // Skip invalid points
-            if (std::isnan(x) || std::isnan(y) || std::isnan(z)) continue;
-            
-            // Filter by ROI
-            if (x >= x_min && x <= x_max &&
-                y >= y_min && y <= y_max &&
-                z >= z_min && z <= z_max) {
-                
-                // Calculate bin index
-                int bin_idx = static_cast<int>((y - y_min) / bin_size);
-                
-                // Clamp to valid range
-                if (bin_idx >= 0 && bin_idx < num_bins) {
-                    bins[bin_idx]++;
-                    total_roi_points++;
-                }
-            }
-        }
-        
-        if (total_roi_points < min_points_per_pole * 2) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
-                "Insufficient points in ROI: %d (need %d)", 
-                total_roi_points, min_points_per_pole * 2);
-            
-            // Stop lateral movement but maintain altitude
-            if (!test_mode) {
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                float altitude_error = initial_z - current_pose.pose.position.z;
-                float vz_global = 0.0;
-                if (std::abs(altitude_error) > 0.05f) {
-                    vz_global = 0.4f * altitude_error;
-                    vz_global = std::max(-0.3f, std::min(0.3f, vz_global));
-                }
-                
-                geometry_msgs::msg::TwistStamped stop_cmd;
-                stop_cmd.header.stamp = node->now();
-                stop_cmd.header.frame_id = "map";
-                stop_cmd.twist.linear.z = vz_global;  // Maintain altitude
-                node->publishLocalVelocity(stop_cmd);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        // ===== STEP 3: Find 2 peak bins (left & right poles) =====
-        
-        // Find first peak (highest bin count)
-        int first_peak_idx = -1;
-        int first_peak_count = 0;
-        
-        for (int i = 0; i < num_bins; i++) {
-            if (bins[i] > first_peak_count) {
-                first_peak_count = bins[i];
-                first_peak_idx = i;
-            }
-        }
-        
-        if (first_peak_count < min_points_per_pole) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
-                "First peak too weak: %d points (need %d)", 
-                first_peak_count, min_points_per_pole);
-            
-            // Stop lateral movement but maintain altitude
-            if (!test_mode) {
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                float altitude_error = initial_z - current_pose.pose.position.z;
-                float vz_global = 0.0;
-                if (std::abs(altitude_error) > 0.05f) {
-                    vz_global = 0.4f * altitude_error;
-                    vz_global = std::max(-0.3f, std::min(0.3f, vz_global));
-                }
-                
-                geometry_msgs::msg::TwistStamped stop_cmd;
-                stop_cmd.header.stamp = node->now();
-                stop_cmd.header.frame_id = "map";
-                stop_cmd.twist.linear.z = vz_global;
-                node->publishLocalVelocity(stop_cmd);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        // Find second peak (must be at least 10 bins away from first peak)
-        int second_peak_idx = -1;
-        int second_peak_count = 0;
-        const int min_peak_separation = 10;  // ~1.0m minimum separation
-        
-        for (int i = 0; i < num_bins; i++) {
-            // Must be far enough from first peak
-            if (std::abs(i - first_peak_idx) < min_peak_separation) continue;
-            
-            if (bins[i] > second_peak_count) {
-                second_peak_count = bins[i];
-                second_peak_idx = i;
-            }
-        }
-        
-        if (second_peak_count < min_points_per_pole) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
-                "Second peak too weak: %d points (need %d)", 
-                second_peak_count, min_points_per_pole);
-            
-            // Stop lateral movement but maintain altitude
-            if (!test_mode) {
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                float altitude_error = initial_z - current_pose.pose.position.z;
-                float vz_global = 0.0;
-                if (std::abs(altitude_error) > 0.05f) {
-                    vz_global = 0.4f * altitude_error;
-                    vz_global = std::max(-0.3f, std::min(0.3f, vz_global));
-                }
-                
-                geometry_msgs::msg::TwistStamped stop_cmd;
-                stop_cmd.header.stamp = node->now();
-                stop_cmd.header.frame_id = "map";
-                stop_cmd.twist.linear.z = vz_global;
-                node->publishLocalVelocity(stop_cmd);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        // ===== STEP 4: Determine left & right poles =====
-        
-        int left_idx = (first_peak_idx < second_peak_idx) ? first_peak_idx : second_peak_idx;
-        int right_idx = (first_peak_idx < second_peak_idx) ? second_peak_idx : first_peak_idx;
-        
-        float left_y = y_min + (left_idx + 0.5f) * bin_size;  // Center of bin
-        float right_y = y_min + (right_idx + 0.5f) * bin_size;
-        
-        float detected_width = right_y - left_y;
-        
-        // ===== STEP 5: Validate gate width =====
-        
-        if (detected_width < gate_width_min || detected_width > gate_width_max) {
-            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
-                "Invalid gate width: %.2fm (expected %.2f-%.2fm)",
-                detected_width, gate_width_min, gate_width_max);
-            
-            // Stop lateral movement but maintain altitude
-            if (!test_mode) {
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                float altitude_error = initial_z - current_pose.pose.position.z;
-                float vz_global = 0.0;
-                if (std::abs(altitude_error) > 0.05f) {
-                    vz_global = 0.4f * altitude_error;
-                    vz_global = std::max(-0.3f, std::min(0.3f, vz_global));
-                }
-                
-                geometry_msgs::msg::TwistStamped stop_cmd;
-                stop_cmd.header.stamp = node->now();
-                stop_cmd.header.frame_id = "map";
-                stop_cmd.twist.linear.z = vz_global;
-                node->publishLocalVelocity(stop_cmd);
-            }
-            
-            consecutive_centered_count = 0;
-            rclcpp::spin_some(node);
-            rate.sleep();
-            continue;
-        }
-        
-        // ===== STEP 6: Calculate lateral offset =====
-        
-        float center_y = (left_y + right_y) / 2.0f;
-        float lateral_error = center_y;  // Positive = gate to the right
-        
-        // ===== STEP 7: Check if centered =====
-        
-        bool is_centered = (std::abs(lateral_error) < tolerance);
-        
-        if (is_centered) {
-            consecutive_centered_count++;
-            
-            if (test_mode) {
-                RCLCPP_INFO(node->get_logger(),
-                    "CENTERED! Frame %d/%d | Gate[L:%.2fm R:%.2fm W:%.2fm] | Offset:%.3fm",
-                    consecutive_centered_count, required_centered_frames,
-                    left_y, right_y, detected_width, lateral_error);
-            } else {
-                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
-                    "CENTERED! Frame %d/%d | Gate: [L:%.2fm R:%.2fm W:%.2fm] | Err: %.3fm | Pts[L:%d R:%d]",
-                    consecutive_centered_count, required_centered_frames,
-                    left_y, right_y, detected_width, lateral_error,
-                    bins[left_idx], bins[right_idx]);
-            }
-            
-            // Stop lateral movement when centered, but maintain altitude!
-            if (!test_mode) {
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                
-                // Altitude control (gentle correction to maintain initial altitude)
-                float altitude_error = initial_z - current_pose.pose.position.z;
-                float vz_global = 0.0;
-                if (std::abs(altitude_error) > 0.05f) {  // Tighter tolerance when centered
-                    vz_global = 0.4f * altitude_error;  // Slightly more aggressive
-                    vz_global = std::max(-0.3f, std::min(0.3f, vz_global));
-                }
-                
-                geometry_msgs::msg::TwistStamped stop_cmd;
-                stop_cmd.header.stamp = node->now();
-                stop_cmd.header.frame_id = "map";
-                stop_cmd.twist.linear.x = 0.0;  // No forward/backward
-                stop_cmd.twist.linear.y = 0.0;  // No lateral movement
-                stop_cmd.twist.linear.z = vz_global;  // Maintain altitude!
-                node->publishLocalVelocity(stop_cmd);
-            }
-            
-            if (consecutive_centered_count >= required_centered_frames) {
-                if (test_mode) {
-                    RCLCPP_INFO(node->get_logger(), "TEST MODE: Centering validation SUCCESSFUL!");
-                } else {
-                    RCLCPP_INFO(node->get_logger(), "Gate centering SUCCESSFUL!");
-                }
-                status = true;
-                break;
-            }
-        } else {
-            consecutive_centered_count = 0;
-            
-            // ===== STEP 8: Calculate and publish velocity command =====
-            
-            // In BODY frame: X=forward, Y=left, Z=up
-            // lateral_error > 0 means gate is to the RIGHT, need to move RIGHT (negative Y in body frame... wait no!)
-            // Actually in Livox/ROS convention:
-            // - Y positive = left side
-            // - Y negative = right side
-            // So if gate center has positive Y, it's on the left, we need to move left (positive Y velocity)
-            // If gate center has negative Y, it's on the right, we need to move right (negative Y velocity)
-            // Simple: velocity should match the error sign (no negative!)
-            
-            float target_velocity_body_y = proportional_gain * lateral_error;  // No negative sign!
-            
-            // Apply velocity limits
-            target_velocity_body_y = std::max(-max_velocity, std::min(max_velocity, target_velocity_body_y));
-            
-            if (test_mode) {
-                std::string direction = (lateral_error > 0) ? "RIGHT" : "LEFT";
-                
-                RCLCPP_INFO(node->get_logger(),
-                    "NOT CENTERED | Gate[L:%.2fm R:%.2fm W:%.2fm] | Offset:%.3fm %s | Vel:%.3fm/s",
-                    left_y, right_y, detected_width, lateral_error, direction.c_str(), target_velocity_body_y);
-            }
-            
-            if (!test_mode) {
-                // Get current pose for frame transformation
-                geometry_msgs::msg::PoseStamped current_pose = node->getCurrentLocalPose();
-                float current_yaw = getHeading(current_pose.pose.orientation);
-                
-                // Transform velocity from BODY frame to GLOBAL frame (map)
-                // This is critical for correct movement regardless of drone orientation!
-                // Global frame transformation:
-                // vx_global = vx_body * cos(yaw) - vy_body * sin(yaw)
-                // vy_global = vx_body * sin(yaw) + vy_body * cos(yaw)
-                float vx_body = 0.0;  // No forward/backward during centering
-                float vy_body = target_velocity_body_y;
-                
-                float vx_global = vx_body * cos(current_yaw) - vy_body * sin(current_yaw);
-                float vy_global = vx_body * sin(current_yaw) + vy_body * cos(current_yaw);
-                
-                // Altitude control (gentle correction)
-                float altitude_error = initial_z - current_pose.pose.position.z;
-                float vz_global = 0.0;
-                if (std::abs(altitude_error) > 0.1f) {
-                    vz_global = 0.3f * altitude_error;  // Gentle proportional control
-                    vz_global = std::max(-0.2f, std::min(0.2f, vz_global));
-                }
-                
-                // Publish velocity command in GLOBAL frame (map/odom)
-                geometry_msgs::msg::TwistStamped twist_cmd;
-                twist_cmd.header.stamp = node->now();
-                twist_cmd.header.frame_id = "map";  // Global frame for correct orientation
-                twist_cmd.twist.linear.x = vx_global;
-                twist_cmd.twist.linear.y = vy_global;
-                twist_cmd.twist.linear.z = vz_global;
-                
-                node->publishLocalVelocity(twist_cmd);
-                
-                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
-                    "Centering: Gate[L:%.2f R:%.2f W:%.2fm] | Err:%.3fm | Vel_body_y:%.3f | Vel_map[x:%.3f y:%.3f] | Yaw:%.1f° | Pts[L:%d R:%d]",
-                    left_y, right_y, detected_width, lateral_error, target_velocity_body_y, 
-                    vx_global, vy_global, current_yaw * 180.0 / M_PI,
-                    bins[left_idx], bins[right_idx]);
-            }
-        }
-        
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-    
-    // Final stop
-    if (!test_mode) {
-        geometry_msgs::msg::TwistStamped stop_cmd;
-        stop_cmd.header.stamp = node->now();
-        stop_cmd.header.frame_id = "map";
-        node->publishLocalVelocity(stop_cmd);
-    }
-    
-    if (status) {
-        if (test_mode) {
-            RCLCPP_INFO(node->get_logger(), "\n=== TEST MODE: LiDAR Centering Validation COMPLETED ===");
-        } else {
-            RCLCPP_INFO(node->get_logger(), "=== SIMPLE Livox Gate Centering COMPLETED ===");
-        }
-    } else {
-        if (test_mode) {
-            RCLCPP_ERROR(node->get_logger(), "\n=== TEST MODE: LiDAR Centering Validation FAILED ===");
-        } else {
-            RCLCPP_ERROR(node->get_logger(), "=== SIMPLE Livox Gate Centering FAILED ===");
-        }
-    }
-}
-
-
-void centering_artag(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    float speed_xy,
-    bool &status,
-    float acc,
-    float maxAccel,
-    float x,
-    float y,
-    float min_center_time,
-    float max_center_pitch,
-    float max_center_roll,
-    float hover_pitch,
-    float hover_roll,
-    std::string recovery_method,
-    float centering_tolerance)
-{
-    (void)x; (void)y; // Unused but kept aja
-    RCLCPP_INFO(node->get_logger(), "=== Starting ArTag Centering (PnP Meters) ===");
-    RCLCPP_INFO(node->get_logger(), "Deadband (acc): %.3fm, Finish Tolerance: %.3fm", acc, centering_tolerance);
-    status = false;
-    auto last_detected_time = node->now();
-    auto last_center_time = node->now();
-    bool centered = false;
-    geometry_msgs::msg::TwistStamped velocity_msg;
-    geometry_msgs::msg::TwistStamped last_vel;
-    geometry_msgs::msg::Point error_p, last_error, error_d;
-    bool have_last_error = false;
-    const float Kp = 1.0f;
-    const float Kd = 0.1f;
-    while (rclcpp::ok()) {
-        auto artag_pose = node->getCurrentPoseArTag();
-        if (artag_pose.pose.position.x != 0.0 || artag_pose.pose.position.y != 0.0) {
-            last_detected_time = node->now();
-            // Mapping Downward Camera to Body Frame:
-            // Body Forward (X) = -Camera Y
-            // Body Left (Y)    = -Camera X
-            error_p.x = -artag_pose.pose.position.y;
-            error_p.y = -artag_pose.pose.position.x;
-            if (have_last_error) {
-                error_d.x = (error_p.x - last_error.x) * RATE;
-                error_d.y = (error_p.y - last_error.y) * RATE;
-            } else {
-                error_d.x = 0; error_d.y = 0;
-                have_last_error = true;
-            }
-            last_error = error_p;
-            float dist_xy = std::hypot(error_p.x, error_p.y);
-            // PD Control with Deadband
-            float cmd_forward = Kd * error_d.x;
-            float cmd_left = Kd * error_d.y;
-            if (dist_xy > acc) {
-                cmd_forward += Kp * error_p.x;
-                cmd_left += Kp * error_p.y;
-            }
-            velocity_msg.twist.linear.x = cmd_forward;
-            velocity_msg.twist.linear.y = cmd_left;
-            velocity_msg.twist.linear.z = 0.0;
-            // Smooth velocity
-            velocity_msg = limitDelta(maxAccel / RATE, velocity_msg, last_vel);
-            velocity_msg = limit(speed_xy, velocity_msg);
-            node->publishLocalVelocity(velocity_msg);
-            last_vel = velocity_msg;
-            // Check centering conditions
-            float roll = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_roll;
-            float pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_pitch;
-            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "ArTag: dist=%.3f, roll=%.1f, pitch=%.1f", dist_xy, roll, pitch);
-            if (dist_xy <= centering_tolerance && roll <= max_center_roll && pitch <= max_center_pitch) {
-                if (!centered) {
-                    centered = true;
-                    last_center_time = node->now();
-                }
-                if ((node->now() - last_center_time).seconds() >= min_center_time) {
-                    RCLCPP_INFO(node->get_logger(), "++++++++++++ ArTag CENTERED! ++++++++++++");
-                    status = true;
-                    break;
-                }
-            } else {
-                centered = false;
-            }
-            
-        } else {
-            // Tag Lost
-            centered = false;
-            have_last_error = false;
-            auto time_lost = (node->now() - last_detected_time).seconds();
-            if (time_lost > 30.0) {
-                RCLCPP_WARN(node->get_logger(), "ArTag lost > 30s, aborting.");
-                break;
-            }
-            
-            if (recovery_method == "local_pose") {
-                auto last_nonzero = node->getLastNonZeroPoseArTag();
-                if (last_nonzero.pose.position.x != 0.0) {
-                    RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "Lost, returning to site...");
-                    // Use standard moveToPoint to return to detection site
-                    // We need to transform the last seen tag error relative to the drone pose at that moment
-                    auto drone_pose_at_detection = node->getDroneNonZeroPoseArTag();
-                    geometry_msgs::msg::Point tag_error_body;
-                    tag_error_body.x = -last_nonzero.pose.position.y;
-                    tag_error_body.y = -last_nonzero.pose.position.x;                   
-                    float heading = getHeading(drone_pose_at_detection.pose.orientation);
-                    auto tag_pos_global = drone_pose_at_detection.pose.position + rotatePoint(tag_error_body, heading);                   
-                    geometry_msgs::msg::Pose target;
-                    target.position = tag_pos_global;
-                    target.orientation = drone_pose_at_detection.pose.orientation;
-                    // Small step towards target, enabling ArTag interrupt
-                    moveToPoint(node, rate, drone_pose_at_detection, target, 0.3, acc*2.0, false, false, true);
-                }
-            }
-            node->publishLocalVelocity(zero(velocity_msg));
-        }
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-    node->publishLocalVelocity(zero(velocity_msg));
-    RCLCPP_INFO(node->get_logger(), "ArTag centering finished. Status: %s", status ? "SUCCESS" : "FAILED");
-}
-
-void centering_object(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    float speed_xy,
-    bool &status,
-    float acc,
-    float maxAccel,
-    float x,
-    float y,
-    float min_center_time,
-    float max_center_pitch,
-    float max_center_roll,
-    float hover_pitch,
-    float hover_roll,
-    std::string recovery_method,
-    float centering_tolerance)
-{
-    (void)x; (void)y;
-    RCLCPP_INFO(node->get_logger(), "=== Starting Object Centering (PnP Meters) ===");
-    RCLCPP_INFO(node->get_logger(), "Deadband: %.3fm  Finish tolerance: %.3fm", acc, centering_tolerance);
-    status = false;
-    auto last_detected_time = node->now();
-    auto last_center_time = node->now();
-    bool centered = false;
-    geometry_msgs::msg::TwistStamped velocity_msg;
-    geometry_msgs::msg::TwistStamped last_vel;
-    geometry_msgs::msg::Point error_p, last_error, error_d;
-    bool have_last_error = false;
-    const float Kp = 1.0f;
-    const float Kd = 0.1f;
-
-    while (rclcpp::ok()) {
-        auto payload_pose = node->getCurrentPosePayload();
-        if (payload_pose.pose.position.x != 0.0 || payload_pose.pose.position.y != 0.0) {
-            last_detected_time = node->now();
-
-            // Downward camera → body frame: body_x = -cam_y, body_y = -cam_x
-            error_p.x = -payload_pose.pose.position.y;
-            error_p.y = -payload_pose.pose.position.x;
-
-            if (have_last_error) {
-                error_d.x = (error_p.x - last_error.x) * RATE;
-                error_d.y = (error_p.y - last_error.y) * RATE;
-            } else {
-                error_d.x = 0.0; error_d.y = 0.0;
-                have_last_error = true;
-            }
-            last_error = error_p;
-
-            const float dist_xy = std::hypot(error_p.x, error_p.y);
-
-            // PD control with deadband on P term
-            float cmd_x = Kd * error_d.x;
-            float cmd_y = Kd * error_d.y;
-            if (dist_xy > acc) {
-                cmd_x += Kp * error_p.x;
-                cmd_y += Kp * error_p.y;
-            }
-
-            velocity_msg.twist.linear.x = cmd_x;
-            velocity_msg.twist.linear.y = cmd_y;
-            velocity_msg.twist.linear.z = 0.0;
-            velocity_msg = limitDelta(maxAccel / RATE, velocity_msg, last_vel);
-            velocity_msg = limit(speed_xy, velocity_msg);
-            node->publishLocalVelocity(velocity_msg);
-            last_vel = velocity_msg;
-
-            const float roll  = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation)  * 180.0f / M_PI) - hover_roll;
-            const float pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0f / M_PI) - hover_pitch;
-
-            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
-                "Object centering: dist=%.3fm  roll=%.1f  pitch=%.1f  vx=%.3f  vy=%.3f",
-                dist_xy, roll, pitch, velocity_msg.twist.linear.x, velocity_msg.twist.linear.y);
-
-            if (dist_xy <= centering_tolerance && roll <= max_center_roll && pitch <= max_center_pitch) {
-                if (!centered) {
-                    centered = true;
-                    last_center_time = node->now();
-                }
-                if ((node->now() - last_center_time).seconds() >= min_center_time) {
-                    RCLCPP_INFO(node->get_logger(), "++++++++++++ Object CENTERED! ++++++++++++");
-                    status = true;
-                    break;
-                }
-            } else {
-                centered = false;
-            }
-
-        } else {
-            // Object lost
-            centered = false;
-            have_last_error = false;
-            const double time_lost = (node->now() - last_detected_time).seconds();
-
-            if (time_lost > 30.0) {
-                RCLCPP_WARN(node->get_logger(), "Object lost > 30s, aborting centering.");
-                break;
-            }
-
-            if (recovery_method == "local_pose") {
-                const auto last_nonzero = node->getLastNonZeroPosePayload();
-                if (last_nonzero.pose.position.x != 0.0 || last_nonzero.pose.position.y != 0.0) {
-                    RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
-                        "Object lost, returning to last detection site...");
-                    auto drone_at_detection = node->getDroneNonZeroPosePayload();
-                    geometry_msgs::msg::Point obj_body;
-                    obj_body.x = -last_nonzero.pose.position.y;
-                    obj_body.y = -last_nonzero.pose.position.x;
-                    const float heading = getHeading(drone_at_detection.pose.orientation);
-                    geometry_msgs::msg::Pose target;
-                    target.position = drone_at_detection.pose.position + rotatePoint(obj_body, heading);
-                    target.orientation = drone_at_detection.pose.orientation;
-                    // allow_centering_payload=true so we break immediately when object reappears
-                    moveToPoint(node, rate, drone_at_detection, target, 0.3f, acc * 2.0f, true, false, false);
-                }
-            }
-            node->publishLocalVelocity(zero(velocity_msg));
-        }
-
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-
-    node->publishLocalVelocity(zero(velocity_msg));
-    node->resetNonzeroPayloadPose();
-    RCLCPP_INFO(node->get_logger(), "Object centering finished. Status: %s", status ? "SUCCESS" : "FAILED");
-}
-
-void correct_heading_artag(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    bool &status,
-    float yaw_acc,
-    float min_align_time,
-    float timeout,
-    float hover_pitch,
-    float hover_roll)
-{
-    RCLCPP_INFO(node->get_logger(), "=== Starting ArTag Heading Correction (Closest 90 Deg) ===");
-    status = false;
-    auto start_time = node->now();
-    auto last_detected_time = node->now();
-    auto last_align_time = node->now();
-    bool aligned = false;
-    geometry_msgs::msg::TwistStamped velocity_msg;
-    float last_yaw_error = 0.0f;
-    bool have_last_error = false;
-    // Control Gains
-    const float Kp_yaw = 0.6f;
-    const float Kd_yaw = 0.15f;
-    while (rclcpp::ok()) {
-        auto elapsed = (node->now() - start_time).seconds();
-        if (elapsed > timeout) {
-            RCLCPP_WARN(node->get_logger(), "Heading correction timeout.");
-            break;
-        }
-
-        auto artag_pose = node->getCurrentPoseArTag();
-
-        if (artag_pose.pose.position.x != 0.0 || artag_pose.pose.position.y != 0.0) {
-            last_detected_time = node->now();
-
-            // 1. Get raw relative yaw from ArTag detection
-            double tag_yaw_raw = getHeading(artag_pose.pose.orientation);
-
-            // 2. Shortest path to any 90-degree edge (0, 90, 180, 270)
-            // Trick: atan2(sin(4*theta), cos(4*theta)) / 4
-            float yaw_error = static_cast<float>(atan2(sin(4.0 * tag_yaw_raw), cos(4.0 * tag_yaw_raw)) / 4.0);
-
-            // 3. PD Control
-            float d_error = 0.0f;
-            if (have_last_error) {
-                d_error = (yaw_error - last_yaw_error) * RATE;
-            }
-            have_last_error = true;
-            last_yaw_error = yaw_error;
-
-            float cmd_yaw = (Kp_yaw * yaw_error) + (Kd_yaw * d_error);
-            
-            // Limit rotation speed for safety
-            cmd_yaw = std::max(-0.6f, std::min(0.6f, cmd_yaw));
-
-            velocity_msg.twist.linear.x = 0.0;
-            velocity_msg.twist.linear.y = 0.0;
-            velocity_msg.twist.linear.z = 0.0;
-            velocity_msg.twist.angular.z = cmd_yaw;
-
-            node->publishLocalVelocity(velocity_msg);
-
-            // 4. Check alignment conditions
-            float yaw_err_deg = std::abs(yaw_error * 180.0 / M_PI);
-            float roll = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_roll;
-            float pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_pitch;
-
-            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
-                "Heading Alignment: err=%.2f deg, roll=%.1f, pitch=%.1f", yaw_err_deg, roll, pitch);
-
-            if (yaw_err_deg <= yaw_acc && roll <= 2.5 && pitch <= 2.5) {
-                if (!aligned) {
-                    aligned = true;
-                    last_align_time = node->now();
-                }
-                if ((node->now() - last_align_time).seconds() >= min_align_time) {
-                    RCLCPP_INFO(node->get_logger(), "Heading ALIGNED to ArTag edge!");
-                    status = true;
-                    break;
-                }
-            } else {
-                aligned = false;
-            }
-
-        } else {
-            // Tag Lost
-            aligned = false;
-            have_last_error = false;
-            velocity_msg.twist.angular.z = 0.0;
-            node->publishLocalVelocity(velocity_msg);
-
-            if ((node->now() - last_detected_time).seconds() > 5.0) {
-                RCLCPP_WARN(node->get_logger(), "ArTag lost during heading correction.");
-                break;
-            }
-        }
-
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-
-    velocity_msg.twist.angular.z = 0.0;
-    node->publishLocalVelocity(velocity_msg);
-}
-
-void CorrectHeading(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    bool &status,
-    float yaw_acc,
-    float min_align_time,
-    float timeout,
-    float hover_pitch,
-    float hover_roll)
-{
-    RCLCPP_INFO(node->get_logger(), "=== Starting Absolute ArTag Heading Alignment (CorrectHeading) ===");
-    status = false;
-    auto start_time = node->now();
-    auto last_detected_time = node->now();
-    auto last_align_time = node->now();
-    bool aligned = false;
-
-    // MANDATORY STABILIZATION: Wait 1s
-    RCLCPP_INFO(node->get_logger(), "Stabilizing for 1.0s before alignment...");
-    for(int i=0; i<10 && rclcpp::ok(); ++i) {
-        geometry_msgs::msg::TwistStamped zero_vel;
-        node->publishLocalVelocity(zero_vel);
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-
-    geometry_msgs::msg::TwistStamped velocity_msg;
-    float last_yaw_error = 0.0f;
-    float yaw_error_integral = 0.0f;
-    bool have_last_error = false;
-
-    // PID Control Gains
-    const float Kp_yaw = 0.65f;
-    const float Ki_yaw = 0.05f; 
-    const float Kd_yaw = 0.18f;
-    const float max_i = 0.2f;
-
-    while (rclcpp::ok()) {
-        auto elapsed = (node->now() - start_time).seconds();
-        if (elapsed > timeout) {
-            RCLCPP_WARN(node->get_logger(), "Heading alignment timeout.");
-            break;
-        }
-
-        auto artag_pose = node->getCurrentPoseArTag();
-
-        if (artag_pose.pose.position.x != 0.0 || artag_pose.pose.position.y != 0.0) {
-            last_detected_time = node->now();
-
-            // Extract relative orientation
-            double tag_roll = getRoll(artag_pose.pose.orientation) * 180.0 / M_PI;
-            double tag_pitch = getPitch(artag_pose.pose.orientation) * 180.0 / M_PI;
-            double tag_yaw_raw_rad = getHeading(artag_pose.pose.orientation);
-            double tag_yaw_deg = tag_yaw_raw_rad * 180.0 / M_PI;
-
-            // Absolute shortest path to tag's zero heading (no sin(4*theta) symmetry)
-            float yaw_error = static_cast<float>(atan2(sin(tag_yaw_raw_rad), cos(tag_yaw_raw_rad)));
-
-            // PID Calculation
-            float d_error = 0.0f;
-            if (have_last_error) {
-                d_error = (yaw_error - last_yaw_error) * RATE;
-                yaw_error_integral += yaw_error / RATE;
-                yaw_error_integral = std::max(-max_i, std::min(max_i, yaw_error_integral));
-            }
-            have_last_error = true;
-            last_yaw_error = yaw_error;
-
-            float cmd_yaw = (Kp_yaw * yaw_error) + (Ki_yaw * yaw_error_integral) + (Kd_yaw * d_error);
-            cmd_yaw = std::max(-0.6f, std::min(0.6f, cmd_yaw));
-
-            velocity_msg.twist.linear.x = 0.0;
-            velocity_msg.twist.linear.y = 0.0;
-            velocity_msg.twist.linear.z = 0.0;
-            velocity_msg.twist.angular.z = cmd_yaw;
-
-            node->publishLocalVelocity(velocity_msg);
-
-            // Alignment metrics
-            float yaw_err_deg = std::abs(yaw_error * 180.0 / M_PI);
-            float drone_roll = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_roll;
-            float drone_pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_pitch;
-
-            RCLCPP_INFO(node->get_logger(),
-                "ALIGN TAG: Y:%.1f deg | Err:%.2f deg | Cmd:%.2f | Drone: R:%.1f P:%.1f",
-                tag_yaw_deg, yaw_err_deg, cmd_yaw, drone_roll, drone_pitch);
-
-            // Success Gate
-            if (yaw_err_deg <= yaw_acc && drone_roll <= 3.0 && drone_pitch <= 3.0 && (node->now() - start_time).seconds() > 2.0) {
-                if (!aligned) {
-                    aligned = true;
-                    last_align_time = node->now();
-                }
-                if ((node->now() - last_align_time).seconds() >= min_align_time) {
-                    RCLCPP_INFO(node->get_logger(), "Heading ALIGNED to Absolute ArTag Front!");
-                    status = true;
-                    break;
-                }
-            } else {
-                aligned = false;
-            }
-
-        } else {
-            // Tag Lost
-            aligned = false;
-            have_last_error = false;
-            yaw_error_integral = 0;
-            velocity_msg.twist.angular.z = 0.0;
-            node->publishLocalVelocity(velocity_msg);
-
-            if ((node->now() - last_detected_time).seconds() > 5.0) {
-                RCLCPP_WARN(node->get_logger(), "ArTag lost during absolute heading alignment.");
-                break;
-            }
-        }
-
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-
-    velocity_msg.twist.angular.z = 0.0;
-    node->publishLocalVelocity(velocity_msg);
-}
-void reOrientation(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    bool &status,
-    float yaw_acc,
-    float min_align_time,
-    float timeout,
-    float hover_pitch,
-    float hover_roll)
-{
-    RCLCPP_INFO(node->get_logger(), "=== Starting ArTag reOrientation (Centering Logic) ===");
-    status = false;
-    auto start_time = node->now();
-    auto last_detected_time = node->now();
-    auto last_center_time = node->now();
-    bool centered = false;
-
-    geometry_msgs::msg::TwistStamped velocity_msg;
-    float error_p = 0.0f;
-    float last_error = 0.0f;
-    float error_d = 0.0f;
-    bool have_last_error = false;
-
-    // Control Gains (Aggressive enough but damped)
-    const float Kp = 0.8f;
-    const float Kd = 0.12f;
-
-    while (rclcpp::ok()) {
-        auto elapsed = (node->now() - start_time).seconds();
-        if (elapsed > timeout) {
-            RCLCPP_WARN(node->get_logger(), "reOrientation timeout.");
-            break;
-        }
-
-        auto artag_pose = node->getCurrentPoseArTag();
-
-        if (artag_pose.pose.position.x != 0.0 || artag_pose.pose.position.y != 0.0) {
-            last_detected_time = node->now();
-
-            double theta = getHeading(artag_pose.pose.orientation);
-            error_p = static_cast<float>(atan2(sin(theta), cos(theta)));
-
-            if (have_last_error) {
-                error_d = (error_p - last_error) * RATE;
-            } else {
-                error_d = 0;
-                have_last_error = true;
-            }
-            last_error = error_p;
-
-            float cmd_yaw = (Kp * error_p) + (Kd * error_d);
-            cmd_yaw = std::max(-0.6f, std::min(0.6f, cmd_yaw));
-
-            velocity_msg.twist.linear.x = 0.0;
-            velocity_msg.twist.linear.y = 0.0;
-            velocity_msg.twist.linear.z = 0.0;
-            velocity_msg.twist.angular.z = cmd_yaw;
-
-            node->publishLocalVelocity(velocity_msg);
-
-            float yaw_err_deg = std::abs(error_p * 180.0 / M_PI);
-            float drone_roll = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_roll;
-            float drone_pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_pitch;
-
-            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
-                "reOrientation: err=%.2f deg, roll=%.1f, pitch=%.1f", yaw_err_deg, drone_roll, drone_pitch);
-
-            if (yaw_err_deg <= yaw_acc && drone_roll <= 3.0 && drone_pitch <= 3.0) {
-                if (!centered) {
-                    centered = true;
-                    last_center_time = node->now();
-                }
-                if ((node->now() - last_center_time).seconds() >= min_align_time) {
-                    RCLCPP_INFO(node->get_logger(), "++++++++++++ Heading reOriented! ++++++++++++");
-                    status = true;
-                    break;
-                }
-            } else {
-                centered = false;
-            }
-
-        } else {
-            centered = false;
-            have_last_error = false;
-            velocity_msg.twist.angular.z = 0.0;
-            node->publishLocalVelocity(velocity_msg);
-
-            if ((node->now() - last_detected_time).seconds() > 5.0) {
-                RCLCPP_WARN(node->get_logger(), "ArTag lost during reOrientation.");
-                break;
-            }
-        }
-
-        rclcpp::spin_some(node);
-        rate.sleep();
-    }
-
-    velocity_msg.twist.angular.z = 0.0;
-    node->publishLocalVelocity(velocity_msg);
-}
-
 void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_alt, float tolerance, float timeout) {
     geometry_msgs::msg::PoseStamped curr_pose = node->getCurrentLocalPose();
     float current_alt = curr_pose.pose.position.z;
@@ -4099,4 +2227,166 @@ void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, ge
     }
 
     posee = node->getCurrentLocalPose();
+}
+
+void centering_red(
+    const std::shared_ptr<DroneController>& node,
+    rclcpp::Rate &rate,
+    float speed_xy,
+    bool &status,
+    float acc,
+    float maxAccel,
+    float x,
+    float y,
+    float min_center_time,
+    float max_center_pitch,
+    float max_center_roll,
+    float hover_pitch,
+    float hover_roll,
+    std::string recovery_method,
+    float centering_tolerance,
+    std::string topic)
+{
+    (void)x; (void)y; 
+    RCLCPP_INFO(node->get_logger(), "=== Starting RED Centering (PnP Meters) ===");
+    RCLCPP_INFO(node->get_logger(), "Topic: %s | Deadband (acc): %.3fm, Finish Tolerance: %.3fm", topic.c_str(), acc, centering_tolerance);
+    status = false;
+    geometry_msgs::msg::PoseStamped::SharedPtr latest_red = nullptr;
+    auto red_sub = node->create_subscription<geometry_msgs::msg::PoseStamped>(topic, 10, [&latest_red](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { latest_red = msg; });
+    auto last_detected_time = node->now();
+    auto last_center_time = node->now();
+    bool centered = false;
+    geometry_msgs::msg::TwistStamped velocity_msg;
+    geometry_msgs::msg::TwistStamped last_vel;
+    geometry_msgs::msg::Point error_p, last_error, error_d;
+    bool have_last_error = false;
+    const float Kp = 2.5f;   // aggressive: fast approach from far, still proportional near center
+    const float Kd = 0.01f;  // minimal braking — don't fight the final approach
+    const float min_velocity = 0.05f;  // [m/s]
+    geometry_msgs::msg::PoseStamped last_nonzero_red;
+    geometry_msgs::msg::PoseStamped drone_at_detection;
+    bool have_nonzero = false;
+    geometry_msgs::msg::PoseStamped hold_pose = node->getCurrentLocalPose();
+    const float locked_yaw_red = getHeading(hold_pose.pose.orientation);
+    auto make_vel_yaw_cmd_red = [&](float vx, float vy, float vz) {
+        mavros_msgs::msg::PositionTarget pt;
+        pt.header.stamp    = node->now();
+        pt.header.frame_id = "map";
+        pt.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+        pt.type_mask =
+            mavros_msgs::msg::PositionTarget::IGNORE_PX  |
+            mavros_msgs::msg::PositionTarget::IGNORE_PY  |
+            mavros_msgs::msg::PositionTarget::IGNORE_PZ  |
+            mavros_msgs::msg::PositionTarget::IGNORE_AFX |
+            mavros_msgs::msg::PositionTarget::IGNORE_AFY |
+            mavros_msgs::msg::PositionTarget::IGNORE_AFZ |
+            mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
+        pt.velocity.x = vx;
+        pt.velocity.y = vy;
+        pt.velocity.z = vz;
+        pt.yaw = locked_yaw_red;
+        return pt;
+    };
+
+    while (rclcpp::ok()) {
+        const bool detected =
+            latest_red &&
+            (latest_red->pose.position.x != 0.0 || latest_red->pose.position.y != 0.0);
+        if (detected) {
+            last_detected_time = node->now();
+            last_nonzero_red = *latest_red;
+            drone_at_detection = node->getCurrentLocalPose();
+            have_nonzero = true;
+            error_p.x = -latest_red->pose.position.y;
+            error_p.y = -latest_red->pose.position.x;
+            if (have_last_error) {
+                error_d.x = (error_p.x - last_error.x) * RATE;
+                error_d.y = (error_p.y - last_error.y) * RATE;
+            } else {
+                error_d.x = 0; error_d.y = 0;
+                have_last_error = true;
+            }
+            last_error = error_p;
+            float dist_xy = std::hypot(error_p.x, error_p.y);
+            float scale = (dist_xy > 1e-6f) ? std::min(1.0f, dist_xy / std::max(acc, 1e-6f)) : 0.0f;
+            float cmd_forward = Kd * error_d.x + scale * Kp * error_p.x;
+            float cmd_left    = Kd * error_d.y + scale * Kp * error_p.y;
+            {
+                geometry_msgs::msg::Point cmd_body;
+                cmd_body.x = cmd_forward;
+                cmd_body.y = cmd_left;
+                float heading = getHeading(node->getCurrentLocalPose().pose.orientation);
+                auto cmd_enu = rotatePoint(cmd_body, heading);
+                velocity_msg.twist.linear.x = static_cast<float>(cmd_enu.x);
+                velocity_msg.twist.linear.y = static_cast<float>(cmd_enu.y);
+            }
+            velocity_msg.twist.linear.z = 0.0;
+            velocity_msg = limitDelta(maxAccel / RATE, velocity_msg, last_vel);
+            velocity_msg = limit(speed_xy, velocity_msg);
+            {
+                float h = std::hypot(velocity_msg.twist.linear.x, velocity_msg.twist.linear.y);
+                if (h > 1e-6f && h < min_velocity && dist_xy > centering_tolerance) {
+                    float s = min_velocity / h;
+                    velocity_msg.twist.linear.x *= s;
+                    velocity_msg.twist.linear.y *= s;
+                }
+            }
+            float vz_red;
+            {
+                float current_z = node->getCurrentLocalPose().pose.position.z;
+                float vz_corr = 1.0f * (hold_pose.pose.position.z - current_z);
+                vz_red = std::max(-0.3f, std::min(0.3f, vz_corr));
+                velocity_msg.twist.linear.z = vz_red;
+            }
+            float dist_check = std::hypot(error_p.x, error_p.y);  // == dist_xy, recalc-safe
+            if (dist_check <= centering_tolerance) {
+                RCLCPP_INFO(node->get_logger(), "++++++++++++ RED CENTERED! (%.3fm <= %.3fm) ++++++++++++", dist_check, centering_tolerance);
+                hold_pose = node->getCurrentLocalPose();
+                hold_pose.header.stamp = node->now();
+                hold_pose.header.frame_id = "map";
+                node->publishLocalPosition(hold_pose);
+                status = true;
+                break;
+            }
+            node->publishSetpointRawLocal(
+                make_vel_yaw_cmd_red(velocity_msg.twist.linear.x, velocity_msg.twist.linear.y, vz_red));
+            last_vel = velocity_msg;
+
+            float roll = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_roll;
+            float pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_pitch;
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "RED: dist=%.3f, roll=%.1f, pitch=%.1f", dist_xy, roll, pitch);
+        } else {
+            centered = false;
+            have_last_error = false;
+            last_vel = zero(last_vel); // reset so velocity ramps up smoothly on reacquire
+            auto time_lost = (node->now() - last_detected_time).seconds();
+            if (time_lost > 30.0) {
+                RCLCPP_WARN(node->get_logger(), "RED lost > 30s, aborting.");
+                break;
+            }
+
+            if (recovery_method == "local_pose" && have_nonzero) {
+                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "Lost, returning to site...");
+                geometry_msgs::msg::Point red_error_body;
+                red_error_body.x = -last_nonzero_red.pose.position.y;
+                red_error_body.y = -last_nonzero_red.pose.position.x;
+                float heading = getHeading(drone_at_detection.pose.orientation);
+                auto red_pos_global = drone_at_detection.pose.position + rotatePoint(red_error_body, heading);
+                geometry_msgs::msg::Pose target;
+                target.position = red_pos_global;
+                target.position.z = node->getCurrentLocalPose().pose.position.z;
+                target.orientation = drone_at_detection.pose.orientation;
+                moveToPoint(node, rate, drone_at_detection, target, 0.8, 0.1, false, false, false, false, true);
+                hold_pose = node->getCurrentLocalPose();
+            }
+            hold_pose.header.stamp = node->now();
+            hold_pose.header.frame_id = "map";
+            node->publishLocalPosition(hold_pose);
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "RED not detected (%.1fs), holding position at (%.2f, %.2f, %.2f)", time_lost, hold_pose.pose.position.x, hold_pose.pose.position.y, hold_pose.pose.position.z);
+        }
+        rclcpp::spin_some(node);
+        rate.sleep();
+    }
+    node->publishLocalVelocity(zero(velocity_msg));
+    RCLCPP_INFO(node->get_logger(), "RED centering finished. Status: %s", status ? "SUCCESS" : "FAILED");
 }

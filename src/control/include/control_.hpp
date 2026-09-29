@@ -340,7 +340,7 @@ float getYawError(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rat
 
 void printTitik(std::vector<double>& lat_indoor, std::vector<double>& lon_indoor, std::vector<double>& lat_outdoor, std::vector<double>& lon_outdlat_outdoor, double lat_takeoff, double lon_takeoff);
 
-void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float forward_x, float left_y, float up_z, float yaw_angle, float tolerance);
+void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float forward_x, float left_y, float up_z, float yaw_angle, float tolerance, bool auto_heading = true);
     /**
      * Execute a local waypoint movement by publishing position commands to /mavros/local_position/pose
      * Movement is relative to the current drone position in the local frame
@@ -353,7 +353,11 @@ void LocalMove(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, 
      * - left_y: distance to move left (positive) or right (negative) in meters
      * - up_z: distance to move up (positive) or down (negative) in meters
      * - yaw_angle: target yaw angle in radians (0 = no change, use current heading)
-    * - tolerance: distance tolerance to consider waypoint reached in meters
+     * - tolerance: distance tolerance to consider waypoint reached in meters
+     * - auto_heading: if true (default), automatically rotate the drone to face the
+     *                 nearest cardinal axis (+x / -x / +y / -y) that best matches
+     *                 the requested movement direction.  If false, the yaw is kept
+     *                 at its current value (no heading change during the move).
      */
 
 void Rotate(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float rotation_angle);
@@ -386,207 +390,24 @@ void rotateByDegrees(const std::shared_ptr<DroneController>&node, rclcpp::Rate &
     * - degrees: angle to rotate in DEGREES (positive = RIGHT/clockwise, negative = LEFT/counter-clockwise)
      */
 
-void strafeRight(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float distance, float tolerance);
-    /**
-     * Strafe (move sideways) to the right relative to drone's current heading
-     * This is a convenience wrapper for executeLocalWaypointMove with left_y = -distance
-     * 
-     * parameters:
-     * - node: shared pointer to the DroneController node instance
-     * - rate: reference to the rclcpp::Rate object for controlling the loop rate
-     * - posee: reference to current pose that will be updated with final position
-     * - distance: distance to strafe right in meters (positive value)
-     * - tolerance: distance tolerance to consider waypoint reached in meters
-     */
-
-void strafeLeft(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float distance, float tolerance);
-    /**
-     * Strafe (move sideways) to the left relative to drone's current heading
-     * This is a convenience wrapper for executeLocalWaypointMove with left_y = +distance
-     * 
-     * parameters:
-     * - node: shared pointer to the DroneController node instance
-     * - rate: reference to the rclcpp::Rate object for controlling the loop rate
-     * - posee: reference to current pose that will be updated with final position
-     * - distance: distance to strafe left in meters (positive value)
-     * - tolerance: distance tolerance to consider waypoint reached in meters
-     */
-
-bool detectGatePosts(const std::shared_ptr<DroneController>&node, float &left_post_angle, float &right_post_angle, float &left_post_distance, float &right_post_distance, float gate_width = 1.5, float max_detection_range = 10.0);
-    /**
-     * Detect two gate posts using 2D lidar scan
-     * Gate posts are identified as two distinct obstacles with approximately gate_width distance apart
-     * 
-     * parameters:
-     * - node: shared pointer to the DroneController node instance
-     * - left_post_angle: output angle of left post in radians (relative to drone heading)
-     * - right_post_angle: output angle of right post in radians (relative to drone heading)
-     * - left_post_distance: output distance to left post in meters
-     * - right_post_distance: output distance to right post in meters
-     * - gate_width: expected width of the gate in meters (default 1.5m)
-     * - max_detection_range: maximum range to consider for detection (default 10.0m)
-     * 
-     * returns:
-     * - true if gate posts are successfully detected, false otherwise
-     */
-
-bool detectGatePostsNear(const std::shared_ptr<DroneController>&node, float &left_post_angle, float &right_post_angle, float &left_post_distance, float &right_post_distance, float gate_width = 1.5, float max_detection_range = 10.0, float forward_zone_min = 0.5, float max_lateral_angle = 0.785);
-    /**
-     * Detect NEAREST FORWARD gate posts using 2D lidar scan - ENHANCED for multiple gates
-     * Prioritizes gate directly in front when multiple gates are detected (side-by-side scenario)
-     * 
-     * NEW STRATEGY:
-     * 1. Filters posts by forward zone (x > forward_zone_min) to ignore side/back obstacles
-     * 2. Finds all gate candidates matching gate_width tolerance
-     * 3. Scores each gate by forward alignment (angle to center point)
-     * 4. Selects gate with BEST alignment (closest to 0° heading)
-     * 
-     * parameters:
-     * - node: shared pointer to the DroneController node instance
-     * - left_post_angle: output angle of left post in radians (relative to drone heading)
-     * - right_post_angle: output angle of right post in radians (relative to drone heading)
-     * - left_post_distance: output distance to left post in meters
-     * - right_post_distance: output distance to right post in meters
-     * - gate_width: expected width of the gate in meters (default 1.5m)
-     * - max_detection_range: maximum range to consider for detection (default 10.0m)
-     * - forward_zone_min: minimum forward distance to filter posts (default 0.5m)
-     * - max_lateral_angle: maximum angle to gate center in radians (default 0.785 = 45°)
-     * 
-     * returns:
-     * - true if nearest forward gate is detected, false otherwise
-     */
-
-void centeringGateLivoxSimple(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    geometry_msgs::msg::PoseStamped &posee,
-    float gate_width,
-    float tolerance,
-    bool &status,
-    float max_velocity = 0.2,
-    float proportional_gain = 0.5,
-    float max_time = 30.0,
-    bool test_mode = false);
-    /**
-     * SIMPLE gate centering with Livox Mid-360 using grid binning (similar to 2D lidar)
-     * 
-     * ULTRA-SIMPLE STRATEGY:
-     * 1. Filter point cloud by ROI (forward 1.5-2.5m, lateral ±2m, height 0-2m)
-     * 2. Grid binning: divide lateral range into bins, count points per bin
-     * 3. Find 2 peak bins (highest point counts) = left & right poles
-     * 4. Validate gate width (1.0-2.0m)
-     * 5. Calculate lateral offset and apply proportional control
-     * 6. No complex clustering, no nested loops - just bin counting!
-     * 
-     * FEATURES:
-     * - O(n) complexity - very fast
-     * - Easy to maintain - straightforward grid logic
-     * - Similar to 2D lidar centering approach
-     * - Lateral centering only (no vertical control)
-     * 
-     * parameters:
-     * - node: shared pointer to the DroneController node instance
-     * - rate: reference to the rclcpp::Rate object for controlling the loop rate
-     * - posee: reference to current pose (not used, but kept for consistency)
-     * - gate_width: expected gate width in meters (default 1.5m)
-     * - tolerance: lateral centering tolerance in meters (default 0.15m)
-     * - status: output status indicating success (true) or failure (false)
-     * - max_velocity: maximum velocity in m/s (default 0.2 m/s)
-     * - proportional_gain: Kp gain for lateral control (default 0.5)
-     * - max_time: maximum time to attempt centering in seconds (default 30.0)
-     * 
-     * returns:
-     * - status: true if centering successful, false if timeout or error
-     */
-
-void centering_gate(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    geometry_msgs::msg::PoseStamped &posee,
-    float gate_width,
-    float tolerance,
-    bool &status,
-    float max_velocity = 0.2,
-    float proportional_gain = 0.5,
-    float max_time = 30.0,
-    bool yaw_alignment_enabled = true,
-    bool test_mode = false);
-
-void centering_tag(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    float step,
-    float offset = 0.0,
-    float close_threshold = 0.6,
-    float max_velocity = 0.08,
-    float timeout_sec = 120.0,
-    bool downward_camera = true,
-    float min_velocity = 0.01);
-
-void centering_artag(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    float speed_xy,
-    bool &status,
-    float acc,
-    float maxAccel,
-    float x = 1.0,
-    float y = 0.0,
-    float min_center_time = 0.1,
-    float max_center_pitch = 2.5,
-    float max_center_roll = 2.5,
-    float hover_pitch = 0.0,
-    float hover_roll = 0.0,
-    std::string recovery_method = "local_pose",
-    float centering_tolerance = 0.15);
-
-void centering_object(
-    const std::shared_ptr<DroneController>&node,
-    rclcpp::Rate &rate,
-    float speed_xy,
-    bool &status,
-    float acc,
-    float maxAccel,
-    float x = 1.0,
-    float y = 0.0,
-    float min_center_time = 0.5,
-    float max_center_pitch = 2.5,
-    float max_center_roll = 2.5,
-    float hover_pitch = 0.0,
-    float hover_roll = 0.0,
-    std::string recovery_method = "local_pose",
-    float centering_tolerance = 0.15);
-
-void correct_heading_artag(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    bool &status,
-    float yaw_acc = 2.0,
-    float min_align_time = 0.3,
-    float timeout = 20.0,
-    float hover_pitch = 0.0,
-    float hover_roll = 0.0);
-
-void CorrectHeading(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    bool &status,
-    float yaw_acc = 2.0,
-    float min_align_time = 0.5,
-    float timeout = 20.0,
-    float hover_pitch = 0.0,
-    float hover_roll = 0.0);
-
-void reOrientation(
-    const std::shared_ptr<DroneController>& node,
-    rclcpp::Rate &rate,
-    bool &status,
-    float yaw_acc = 2.0,
-    float min_align_time = 1.0,
-    float timeout = 30.0,
-    float hover_pitch = 0.0,
-    float hover_roll = 0.0);
-
 void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_alt, float tolerance = 0.1, float timeout = 15.0);
+
+void centering_red(
+    const std::shared_ptr<DroneController>&node,
+    rclcpp::Rate &rate,
+    float speed_xy,
+    bool &status,
+    float acc,
+    float maxAccel,
+    float x = 1.0,
+    float y = 0.0,
+    float min_center_time = 0.01,
+    float max_center_pitch = 2.5,
+    float max_center_roll = 2.5,
+    float hover_pitch = 0.0,
+    float hover_roll = 0.0,
+    std::string recovery_method = "local_pose",
+    float centering_tolerance = 0.20,
+    std::string topic = "/vision/red");
 
 #endif // CONTROL__HPP

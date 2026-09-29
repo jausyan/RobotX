@@ -1,0 +1,16 @@
+# Mengabaikan file non-kode / dokumen semantik
+*.pdf
+*.md
+*.txt
+*.png
+*.jpg
+*.jpeg
+
+# Mengabaikan noise dependencies & build artifacts
+node_modules/
+dist/
+build/
+graphify-out/
+*.lock
+*.log
+.env*

@@ -36,10 +36,11 @@ Visualization Manager:
 
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: Obstacles
+      Name: Buoy Map
       Namespaces:
+        buoys: true
         labels: true
-        obstacles: true
+        tracking: true
       Topic:
         Depth: 10
         Durability Policy: Volatile
@@ -93,15 +94,22 @@ Visualization Manager:
       Name: Current View
       Near Clip Distance: 0.01
       Scale: 15
-      Target Frame: <Fixed Frame>
+      Target Frame: drone
       Value: TopDownOrtho (rviz_default_plugins)
       X: 0
       Y: 0
     Saved:
       - Class: rviz_default_plugins/TopDownOrtho
-        Name: Top-Down Map
+        Name: Follow Drone
         Near Clip Distance: 0.01
         Scale: 15
+        Target Frame: drone
+        X: 0
+        Y: 0
+      - Class: rviz_default_plugins/TopDownOrtho
+        Name: Full Map
+        Near Clip Distance: 0.01
+        Scale: 8
         Target Frame: <Fixed Frame>
         X: 0
         Y: 0
@@ -117,5 +125,5 @@ Visualization Manager:
         Invert Z Axis: false
         Near Clip Distance: 0.01
         Pitch: 0.9
-        Target Frame: <Fixed Frame>
+        Target Frame: drone
         Yaw: 0.785

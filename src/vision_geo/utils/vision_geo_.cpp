@@ -45,8 +45,12 @@ VisionGeoNode::VisionGeoNode()
   marker_topic_    = declare_parameter<std::string>("marker_topic",
     "/vision_geo/markers");
   marker_frame_id_ = declare_parameter<std::string>("marker_frame_id", "map");
-  marker_lifetime_s_ = declare_parameter<double>("marker_lifetime_s", 10.0);
-  marker_size_     = declare_parameter<double>("marker_size", 0.5);
+  marker_lifetime_s_     = declare_parameter<double>("marker_lifetime_s", 0.0);
+  marker_size_           = declare_parameter<double>("marker_size", 0.5);
+  map_merge_radius_m_    = declare_parameter<double>("map_merge_radius_m", 2.0);
+  min_obs_to_commit_     = declare_parameter<int>("min_obs_to_commit", 5);
+  track_exit_frames_     = declare_parameter<int>("track_exit_frames", 5);
+  pixel_match_radius_px_ = declare_parameter<double>("pixel_match_radius_px", 100.0);
 
   // display
   show_window_ = declare_parameter<bool>("show_window", true);
@@ -82,10 +86,17 @@ VisionGeoNode::VisionGeoNode()
   }
 
   // ── MAVROS subscriptions ───────────────────────────────────────────────────
+  // always subscribe to pose_topic for altitude gate (position.z = local AGL)
+  pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+    pose_topic_, rclcpp::SensorDataQoS(),
+    [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+      poseCallback(msg);
+    });
+
   if (use_fixed_pose_) {
     RCLCPP_INFO(get_logger(),
-      "Fixed pose mode: lat=%.6f lon=%.6f alt=%.1fm",
-      fixed_lat_, fixed_lon_, fixed_altitude_m_);
+      "Fixed pose mode: lat=%.6f lon=%.6f alt=%.1fm | altitude gate from: %s",
+      fixed_lat_, fixed_lon_, fixed_altitude_m_, pose_topic_.c_str());
     home_lat_ = fixed_lat_;
     home_lon_ = fixed_lon_;
     home_set_ = true;
@@ -94,11 +105,6 @@ VisionGeoNode::VisionGeoNode()
       gps_topic_, rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
         gpsCallback(msg);
-      });
-    pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      pose_topic_, rclcpp::SensorDataQoS(),
-      [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-        poseCallback(msg);
       });
     rel_alt_sub_ = create_subscription<std_msgs::msg::Float32>(
       rel_alt_topic_, rclcpp::SensorDataQoS(),
@@ -129,6 +135,7 @@ VisionGeoNode::VisionGeoNode()
     output_topic_, rclcpp::QoS(10));
   marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
     marker_topic_, rclcpp::QoS(10));
+  tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
   // ── window ────────────────────────────────────────────────────────────────
   if (show_window_) {
@@ -301,7 +308,11 @@ void VisionGeoNode::poseCallback(const geometry_msgs::msg::PoseStamped::SharedPt
   mavros_state_.qy = msg->pose.orientation.y;
   mavros_state_.qz = msg->pose.orientation.z;
   mavros_state_.qw = msg->pose.orientation.w;
-  mavros_state_.pose_valid = true;
+  mavros_state_.x_local     = msg->pose.position.x;
+  mavros_state_.y_local     = msg->pose.position.y;
+  mavros_state_.alt_local   = msg->pose.position.z;
+  mavros_state_.pose_valid  = true;
+  mavros_state_.pose_z_valid = true;
 }
 
 void VisionGeoNode::relAltCallback(const std_msgs::msg::Float32::SharedPtr msg)
@@ -349,15 +360,28 @@ cv::Mat VisionGeoNode::rpy2mat(double roll_deg, double pitch_deg, double yaw_deg
   return Rz * Ry * Rx;
 }
 
-// ── GPS projection ─────────────────────────────────────────────────────────────
-
+// ── Map-absolute projection ──────────────────────────────────────────────────
+//
+// Returns the buoy position in the map (ENU, meters from home), NOT relative to
+// the drone. The whole fix lives here:
+//
+//     buoy_map = drone_map_position + ground_offset_from_camera
+//
+// The drone's own translation across the world (from local_position/pose) is
+// ADDED, so a stationary buoy keeps a fixed map position while the drone flies —
+// it no longer "follows" the camera. GPS lat/lon is derived from the map ENU.
+//
+// Frame convention — empirically verified on this ArduPilot/MAVROS hardware:
+//   x_local → North,  y_local → West (= -East),  z_local → Up
+//   drone_north = x_local,  drone_east = -y_local
 VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
   float u, float v, const MavrosState & state) const
 {
   GeoPoint result;
 
-  // altitude to use
-  const double alt = use_fixed_pose_ ? fixed_altitude_m_ : state.alt_agl;
+  // altitude: always use pose.position.z when available
+  const double alt = state.pose_z_valid ? state.alt_local
+    : (use_fixed_pose_ ? fixed_altitude_m_ : state.alt_agl);
   if (alt < 0.5) {
     return result;  // too low to project reliably
   }
@@ -368,42 +392,52 @@ VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
                                               1.0);
   cv::Mat ray_cam = K_inv_ * pixel;
 
-  // 2. camera → body frame (FLU: x=forward, y=left, z=up)
+  // 2. camera → body frame
   cv::Mat ray_body = R_cam2body_ * ray_cam;
 
-  // 3. body → ENU world frame using MAVROS quaternion
+  // 3. body → native world frame using drone attitude quaternion.
+  //    Use the real orientation whenever pose is valid (works in both modes);
+  //    this rotates the ground offset by the drone heading as it surveys.
   cv::Mat R_body2world;
-  if (use_fixed_pose_) {
-    // Assume perfectly level drone (identity rotation)
-    R_body2world = cv::Mat::eye(3, 3, CV_64F);
-  } else {
+  if (state.pose_valid) {
     R_body2world = quaternionToMat(state.qx, state.qy, state.qz, state.qw);
+  } else {
+    R_body2world = cv::Mat::eye(3, 3, CV_64F);  // assume level until pose arrives
   }
   cv::Mat ray_world = R_body2world * ray_body;
 
-  // 4. ground intersection (ENU: z=down is negative)
+  // 4. ground intersection (native z = Up, ray must point down)
   const double ray_z = ray_world.at<double>(2);
   if (ray_z >= -0.01) {
-    // ray points upward or horizontal — no ground intersection
-    return result;
+    return result;  // ray points up/horizontal — no ground hit
   }
   const double t = alt / (-ray_z);
-  const double east_m  = t * ray_world.at<double>(0);  // ENU x = East
-  const double north_m = t * ray_world.at<double>(1);  // ENU y = North
+  // The quaternion produces ray_world in standard ENU: axis0 = East, axis1 = North.
+  // MAVROS local_position/pose is also ENU: x = East, y = North, z = Up.
+  const double offset_east  = t * ray_world.at<double>(0);
+  const double offset_north = t * ray_world.at<double>(1);
 
-  // 5. offset → GPS (flat-earth approximation, valid < 500m)
-  const double drone_lat = use_fixed_pose_ ? fixed_lat_  : state.lat;
-  const double drone_lon = use_fixed_pose_ ? fixed_lon_ : state.lon;
+  // 5. drone position in the map frame (absolute ENU meters from home).
+  //    Empirically verified for this ArduPilot/MAVROS setup:
+  //      x_local = North  (forward, drone_north = x_local)
+  //      y_local = West   (= -East, so drone_east = -y_local)
+  double drone_east  = 0.0;
+  double drone_north = 0.0;
+  if (state.pose_z_valid) {
+    drone_north =  state.x_local;   // x = North
+    drone_east  = -state.y_local;   // y = West → negate to get East
+  }
 
-  const double dlat = north_m / 111320.0;
-  const double dlon = east_m  / (111320.0 * std::cos(drone_lat * M_PI / 180.0));
+  // 6. absolute buoy position in the map frame
+  result.north_m = drone_north + offset_north;
+  result.east_m  = drone_east  + offset_east;
 
-  result.lat     = drone_lat + dlat;
-  result.lon     = drone_lon + dlon;
-  result.alt     = 0.0;
-  result.north_m = north_m;
-  result.east_m  = east_m;
-  result.valid   = true;
+  // 7. derive GPS from map ENU + home anchor (flat-earth, valid < 500m)
+  result.lat = home_lat_ + result.north_m / 111320.0;
+  result.lon = home_lon_ + result.east_m  /
+    (111320.0 * std::cos(home_lat_ * M_PI / 180.0));
+  result.alt   = 0.0;
+  result.valid = true;
   return result;
 }
 
@@ -456,7 +490,7 @@ void VisionGeoNode::processFrame()
   std::vector<Detection> detections = infer(frame);
   updateFps();
 
-  // GPS projection for each detection
+  // GPS projection for each detection (altitude always from pose.position.z)
   std::vector<GeoPoint> geo_points;
   geo_points.reserve(detections.size());
   for (const auto & det : detections) {
@@ -473,10 +507,11 @@ void VisionGeoNode::processFrame()
 
   if (!detections.empty()) {
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500,
-      "FPS=%.2f | %zu object(s) detected", fps_, detections.size());
+      "FPS=%.2f | pose.z=%.1fm | %zu object(s) detected",
+      fps_, state.alt_local, detections.size());
   } else {
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
-      "FPS=%.2f | No objects detected", fps_);
+      "FPS=%.2f | pose.z=%.1fm | No objects detected", fps_, state.alt_local);
   }
 }
 
@@ -614,42 +649,158 @@ void VisionGeoNode::updateMarkers(
 {
   if (!home_set_) return;
 
-  // remove expired
-  accum_detections_.erase(
-    std::remove_if(accum_detections_.begin(), accum_detections_.end(),
-      [&](const AccumDetection & d) {
-        return (stamp - d.timestamp).seconds() > marker_lifetime_s_;
-      }),
-    accum_detections_.end());
+  // ── step 1: match detections → active tracks (pixel space) ───────────────
+  std::vector<bool> det_matched(dets.size(), false);
+  std::vector<bool> trk_matched(active_tracks_.size(), false);
 
-  // add new valid detections
-  for (size_t i = 0; i < dets.size(); ++i) {
-    if (i >= geo.size() || !geo[i].valid) continue;
+  for (size_t ti = 0; ti < active_tracks_.size(); ++ti) {
+    float best_dist = static_cast<float>(pixel_match_radius_px_);
+    int   best_di   = -1;
 
-    // position relative to home (for RViz map frame)
-    const double north_from_home =
-      (geo[i].lat - home_lat_) * 111320.0;
-    const double east_from_home =
-      (geo[i].lon - home_lon_) * 111320.0 *
-      std::cos(home_lat_ * M_PI / 180.0);
+    for (size_t di = 0; di < dets.size(); ++di) {
+      if (det_matched[di]) continue;
+      if (dets[di].class_id != active_tracks_[ti].class_id) continue;
 
-    const int cid = dets[i].class_id;
-    const std::string label =
-      (cid >= 0 && cid < static_cast<int>(class_names_.size()))
-      ? class_names_[static_cast<size_t>(cid)]
-      : ("class_" + std::to_string(cid));
+      const float dcx = dets[di].box.x + dets[di].box.width  * 0.5f;
+      const float dcy = dets[di].box.y + dets[di].box.height * 0.5f;
+      const float dx  = dcx - active_tracks_[ti].cx;
+      const float dy  = dcy - active_tracks_[ti].cy;
+      const float dist = std::sqrt(dx * dx + dy * dy);
 
-    AccumDetection ad;
-    ad.lat        = geo[i].lat;
-    ad.lon        = geo[i].lon;
-    ad.north_m    = north_from_home;
-    ad.east_m     = east_from_home;
-    ad.class_id   = cid;
-    ad.label      = label;
-    ad.confidence = dets[i].confidence;
-    ad.timestamp  = stamp;
-    accum_detections_.push_back(ad);
+      if (dist < best_dist) { best_dist = dist; best_di = static_cast<int>(di); }
+    }
+
+    if (best_di >= 0) {
+      trk_matched[ti] = true;
+      det_matched[best_di] = true;
+      auto & t = active_tracks_[ti];
+      t.cx = dets[best_di].box.x + dets[best_di].box.width  * 0.5f;
+      t.cy = dets[best_di].box.y + dets[best_di].box.height * 0.5f;
+      t.confidence    = dets[best_di].confidence;
+      t.frames_missing = 0;
+
+      const bool has_geo =
+        best_di < static_cast<int>(geo.size()) && geo[best_di].valid;
+      if (has_geo) {
+        const double e = geo[best_di].east_m;
+        const double n = geo[best_di].north_m;
+        if (t.linked_buoy_id >= 0) {
+          // already confirmed — feed each new observation into its running mean
+          for (auto & pt : buoy_map_) {
+            if (pt.buoy_id == t.linked_buoy_id) {
+              addObservationToBuoy(pt, e, n, t.confidence, stamp);
+              break;
+            }
+          }
+        } else {
+          t.enu_buf.emplace_back(e, n);
+        }
+      }
+    }
   }
+
+  // ── step 2: confirm tracks that reached enough observations ───────────────
+  //    A confirmed track links to a map point (new or existing within radius),
+  //    so the buoy appears on the map immediately — no need to exit the frame.
+  for (auto & t : active_tracks_) {
+    if (t.linked_buoy_id >= 0) continue;
+    if (static_cast<int>(t.enu_buf.size()) < min_obs_to_commit_) continue;
+
+    double sum_e = 0.0, sum_n = 0.0;
+    for (const auto & [e, n_] : t.enu_buf) { sum_e += e; sum_n += n_; }
+    const double n       = static_cast<double>(t.enu_buf.size());
+    const double mean_e  = sum_e / n;
+    const double mean_n  = sum_n / n;
+
+    // merge check: same class, within radius → SAME buoy
+    BuoyMapPoint * nearest = nullptr;
+    double nearest_dist = map_merge_radius_m_;
+    for (auto & pt : buoy_map_) {
+      if (pt.class_id != t.class_id) continue;
+      const double dn   = mean_n - pt.north_m;
+      const double de   = mean_e - pt.east_m;
+      const double dist = std::sqrt(dn * dn + de * de);
+      if (dist < nearest_dist) { nearest_dist = dist; nearest = &pt; }
+    }
+
+    if (nearest) {
+      // existing buoy re-sighted — fold this sighting's observations into its mean
+      nearest->sighting_count++;
+      for (const auto & [e, n_] : t.enu_buf)
+        addObservationToBuoy(*nearest, e, n_, t.confidence, stamp);
+      t.linked_buoy_id = nearest->buoy_id;
+      RCLCPP_INFO(get_logger(),
+        "[map] buoy#%d '%s' re-sighted (sightings=%d, obs=%d, match=%.1fm)",
+        nearest->buoy_id, nearest->label.c_str(),
+        nearest->sighting_count, nearest->obs_count, nearest_dist);
+    } else {
+      // new buoy — seed a fresh map point with the buffered observations
+      BuoyMapPoint pt;
+      pt.buoy_id        = next_buoy_id_++;
+      pt.class_id       = t.class_id;
+      pt.label          = t.label;
+      pt.sighting_count = 1;
+      for (const auto & [e, n_] : t.enu_buf)
+        addObservationToBuoy(pt, e, n_, t.confidence, stamp);
+      t.linked_buoy_id = pt.buoy_id;
+      buoy_map_.push_back(pt);
+      RCLCPP_INFO(get_logger(),
+        "[map] buoy#%d '%s' NEW E=%.1fm N=%.1fm lat=%.6f lon=%.6f (%d obs)",
+        pt.buoy_id, pt.label.c_str(), pt.east_m, pt.north_m,
+        pt.lat, pt.lon, pt.obs_count);
+    }
+    t.enu_buf.clear();  // observations now live in the map point
+  }
+
+  // ── step 3: age unmatched tracks; drop those missing too long ─────────────
+  //    A dropped track's map point (if it was confirmed) stays permanent.
+  std::vector<ActiveTrack> still_active;
+  for (size_t ti = 0; ti < active_tracks_.size(); ++ti) {
+    auto & t = active_tracks_[ti];
+    if (trk_matched[ti]) {
+      still_active.push_back(std::move(t));       // seen this frame
+    } else {
+      t.frames_missing++;
+      if (t.frames_missing < track_exit_frames_)
+        still_active.push_back(std::move(t));      // grace period (occlusion/flicker)
+      // else: exited frame — discard track
+    }
+  }
+  active_tracks_ = std::move(still_active);
+
+  // ── step 4: unmatched detections → new active tracks ─────────────────────
+  for (size_t di = 0; di < dets.size(); ++di) {
+    if (det_matched[di]) continue;
+    const int cid = dets[di].class_id;
+    ActiveTrack t;
+    t.class_id  = cid;
+    t.label     = (cid >= 0 && cid < static_cast<int>(class_names_.size()))
+      ? class_names_[static_cast<size_t>(cid)] : ("class_" + std::to_string(cid));
+    t.confidence = dets[di].confidence;
+    t.cx = dets[di].box.x + dets[di].box.width  * 0.5f;
+    t.cy = dets[di].box.y + dets[di].box.height * 0.5f;
+    if (di < geo.size() && geo[di].valid) {
+      t.enu_buf.emplace_back(geo[di].east_m, geo[di].north_m);
+    }
+    active_tracks_.push_back(t);
+  }
+}
+
+void VisionGeoNode::addObservationToBuoy(
+  BuoyMapPoint & pt, double east_m, double north_m,
+  float confidence, const rclcpp::Time & stamp)
+{
+  pt.sum_east  += east_m;
+  pt.sum_north += north_m;
+  pt.obs_count += 1;
+  // running mean — converges in place (safe now that projection is map-absolute)
+  pt.east_m  = pt.sum_east  / pt.obs_count;
+  pt.north_m = pt.sum_north / pt.obs_count;
+  pt.lat = home_lat_ + pt.north_m / 111320.0;
+  pt.lon = home_lon_ + pt.east_m  /
+    (111320.0 * std::cos(home_lat_ * M_PI / 180.0));
+  if (confidence > pt.best_confidence) pt.best_confidence = confidence;
+  pt.last_seen = stamp;
 }
 
 void VisionGeoNode::publishMarkers()
@@ -657,75 +808,123 @@ void VisionGeoNode::publishMarkers()
   if (!home_set_) return;
 
   visualization_msgs::msg::MarkerArray arr;
+  const auto t_now = now();
 
-  // clear previous
+  // DELETEALL every frame — we republish entire map so IDs stay stable
   visualization_msgs::msg::Marker del;
-  del.action = visualization_msgs::msg::Marker::DELETEALL;
+  del.action          = visualization_msgs::msg::Marker::DELETEALL;
   del.header.frame_id = marker_frame_id_;
-  del.header.stamp = now();
+  del.header.stamp    = t_now;
   arr.markers.push_back(del);
 
   int id = 0;
-  const auto lifetime = rclcpp::Duration::from_seconds(marker_lifetime_s_);
+  const auto permanent = rclcpp::Duration(0, 0);
 
-  for (const auto & d : accum_detections_) {
-    auto [cr, cg, cb] = classColor(d.class_id);
+  // ── confirmed buoy map ────────────────────────────────────────────────────
+  for (const auto & pt : buoy_map_) {
+    auto [cr, cg, cb] = classColor(pt.class_id);
 
-    // sphere marker
     visualization_msgs::msg::Marker sphere;
-    sphere.header.frame_id = marker_frame_id_;
-    sphere.header.stamp    = now();
-    sphere.ns              = "obstacles";
-    sphere.id              = id++;
-    sphere.type            = visualization_msgs::msg::Marker::SPHERE;
-    sphere.action          = visualization_msgs::msg::Marker::ADD;
-    sphere.pose.position.x = d.east_m;   // ENU x = East
-    sphere.pose.position.y = d.north_m;  // ENU y = North
-    sphere.pose.position.z = 0.0;
+    sphere.header.frame_id    = marker_frame_id_;
+    sphere.header.stamp       = t_now;
+    sphere.ns                 = "buoys";
+    sphere.id                 = id++;
+    sphere.type               = visualization_msgs::msg::Marker::SPHERE;
+    sphere.action             = visualization_msgs::msg::Marker::ADD;
+    sphere.pose.position.x    = pt.east_m;
+    sphere.pose.position.y    = pt.north_m;
+    sphere.pose.position.z    = 0.0;
     sphere.pose.orientation.w = 1.0;
     sphere.scale.x = marker_size_;
     sphere.scale.y = marker_size_;
     sphere.scale.z = marker_size_ * 0.3;
-    sphere.color.r = cr;
-    sphere.color.g = cg;
-    sphere.color.b = cb;
-    sphere.color.a = 0.85f;
-    sphere.lifetime = lifetime;
+    sphere.color.r = cr; sphere.color.g = cg; sphere.color.b = cb;
+    sphere.color.a = 0.9f;
+    sphere.lifetime = permanent;
     arr.markers.push_back(sphere);
 
-    // text label above sphere
     visualization_msgs::msg::Marker text;
-    text.header  = sphere.header;
-    text.ns      = "labels";
-    text.id      = id++;
-    text.type    = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-    text.action  = visualization_msgs::msg::Marker::ADD;
-    text.pose.position.x = d.east_m;
-    text.pose.position.y = d.north_m;
-    text.pose.position.z = marker_size_ * 0.8;
+    text.header           = sphere.header;
+    text.ns               = "labels";
+    text.id               = id++;
+    text.type             = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text.action           = visualization_msgs::msg::Marker::ADD;
+    text.pose.position.x  = pt.east_m;
+    text.pose.position.y  = pt.north_m;
+    text.pose.position.z  = marker_size_ * 0.8;
     text.pose.orientation.w = 1.0;
-    text.scale.z = marker_size_ * 0.6;
+    text.scale.z          = marker_size_ * 0.55;
     text.color.r = 1.0f; text.color.g = 1.0f;
     text.color.b = 1.0f; text.color.a = 1.0f;
-    text.text    = d.label + cv::format(" %.2f", static_cast<double>(d.confidence));
-    text.lifetime = lifetime;
+    text.text = cv::format("#%d %s\n[%d obs / %d pass]",
+      pt.buoy_id, pt.label.c_str(), pt.obs_count, pt.sighting_count);
+    text.lifetime = permanent;
     arr.markers.push_back(text);
+  }
+
+  // ── active tracks (currently in frame, yellow ring, short lifetime) ───────
+  const auto tracking_lt = rclcpp::Duration::from_seconds(0.5);
+  for (const auto & t : active_tracks_) {
+    // running mean of buffered map positions — smooth live estimate
+    if (t.enu_buf.empty()) continue;
+    double se = 0.0, sn = 0.0;
+    for (const auto & [e, n_] : t.enu_buf) { se += e; sn += n_; }
+    const double aeast  = se / static_cast<double>(t.enu_buf.size());
+    const double anorth = sn / static_cast<double>(t.enu_buf.size());
+
+    visualization_msgs::msg::Marker ring;
+    ring.header.frame_id    = marker_frame_id_;
+    ring.header.stamp       = t_now;
+    ring.ns                 = "tracking";
+    ring.id                 = id++;
+    ring.type               = visualization_msgs::msg::Marker::CYLINDER;
+    ring.action             = visualization_msgs::msg::Marker::ADD;
+    ring.pose.position.x    = aeast;
+    ring.pose.position.y    = anorth;
+    ring.pose.position.z    = 0.0;
+    ring.pose.orientation.w = 1.0;
+    ring.scale.x = marker_size_ * 1.3;
+    ring.scale.y = marker_size_ * 1.3;
+    ring.scale.z = 0.05;
+    ring.color.r = 1.0f; ring.color.g = 0.9f;
+    ring.color.b = 0.0f; ring.color.a = 0.5f;
+    ring.lifetime = tracking_lt;
+    arr.markers.push_back(ring);
+
+    visualization_msgs::msg::Marker tlabel;
+    tlabel.header           = ring.header;
+    tlabel.ns               = "tracking";
+    tlabel.id               = id++;
+    tlabel.type             = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    tlabel.action           = visualization_msgs::msg::Marker::ADD;
+    tlabel.pose.position.x  = aeast;
+    tlabel.pose.position.y  = anorth;
+    tlabel.pose.position.z  = marker_size_ * 0.9;
+    tlabel.pose.orientation.w = 1.0;
+    tlabel.scale.z          = marker_size_ * 0.45;
+    tlabel.color.r = 1.0f; tlabel.color.g = 1.0f;
+    tlabel.color.b = 0.0f; tlabel.color.a = 1.0f;
+    tlabel.text = t.label + cv::format(" [%zu obs]", t.enu_buf.size());
+    tlabel.lifetime = tracking_lt;
+    arr.markers.push_back(tlabel);
   }
 
   // ── drone position marker ─────────────────────────────────────────────────
   {
-    // current drone offset from home in ENU
+    // use local_position/pose (x=East, y=North, z=Up from home) for drone TF.
+    // this is always the actual drone position regardless of use_fixed_pose_ mode.
     double drone_east  = 0.0;
     double drone_north = 0.0;
-    double drone_alt   = use_fixed_pose_ ? fixed_altitude_m_ : 0.0;
-
-    if (!use_fixed_pose_) {
+    double drone_alt   = 0.0;
+    {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      if (mavros_state_.gps_valid) {
-        drone_north = (mavros_state_.lat - home_lat_) * 111320.0;
-        drone_east  = (mavros_state_.lon - home_lon_) * 111320.0 *
-          std::cos(home_lat_ * M_PI / 180.0);
-        drone_alt   = mavros_state_.alt_agl;
+      if (mavros_state_.pose_z_valid) {
+        drone_north =  mavros_state_.x_local;   // x = North
+        drone_east  = -mavros_state_.y_local;   // y = West → negate to get East
+        drone_alt   = mavros_state_.alt_local;
+      } else {
+        // fallback before first pose message
+        drone_alt = use_fixed_pose_ ? fixed_altitude_m_ : mavros_state_.alt_agl;
       }
     }
 
@@ -806,16 +1005,27 @@ void VisionGeoNode::publishMarkers()
     drone_text.scale.z = 0.6;
     drone_text.color.r = 0.0f; drone_text.color.g = 1.0f;
     drone_text.color.b = 1.0f; drone_text.color.a = 1.0f;
-    if (use_fixed_pose_) {
-      drone_text.text = cv::format("DRONE\nlat=%.5f\nlon=%.5f\nalt=%.1fm",
-        fixed_lat_, fixed_lon_, drone_alt);
-    } else {
+    {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      drone_text.text = cv::format("DRONE\nlat=%.5f\nlon=%.5f\nalt=%.1fm",
-        mavros_state_.lat, mavros_state_.lon, drone_alt);
+      const double disp_lat = use_fixed_pose_ ? fixed_lat_ : mavros_state_.lat;
+      const double disp_lon = use_fixed_pose_ ? fixed_lon_ : mavros_state_.lon;
+      drone_text.text = cv::format(
+        "DRONE\nE=%.1fm N=%.1fm\nalt=%.1fm\nlat=%.5f\nlon=%.5f",
+        drone_east, drone_north, drone_alt, disp_lat, disp_lon);
     }
     drone_text.lifetime = rclcpp::Duration::from_seconds(1.0);
     arr.markers.push_back(drone_text);
+
+    // ── publish map → drone TF so RViz can follow the drone ─────────────────
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.stamp    = t_now;
+    tf.header.frame_id = marker_frame_id_;   // "map"
+    tf.child_frame_id  = "drone";
+    tf.transform.translation.x = drone_east;
+    tf.transform.translation.y = drone_north;
+    tf.transform.translation.z = drone_alt;
+    tf.transform.rotation.w    = 1.0;        // no yaw rotation — north stays up
+    tf_broadcaster_->sendTransform(tf);
   }
 
   marker_pub_->publish(arr);
