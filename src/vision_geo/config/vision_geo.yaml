@@ -14,7 +14,10 @@ vision_geo_node:
     input_height: 320
     conf_threshold: 0.4
     nms_threshold: 0.45
-    class_names: ["buoy"]         # one entry per YOLO class id
+    # one entry per YOLO class id — ORDER MUST MATCH THE MODEL'S CLASS ORDER
+    class_names:   ["buoy_red", "buoy_green", "buoy_blue", "buoy_off", "circle_red", "circle_green", "circle_blue"]
+    object_size_m: [0.4,        0.4,          0.4,         0.4,        0.65,         0.65,           0.65]  # real size per class (solvePnP)
+    geo_classes:   ["buoy_red", "buoy_green", "buoy_blue", "buoy_off"]   # GPS projection + map (Task 1 only); other classes → target pose only
     gps_topic:     "/mavros/global_position/global"
     pose_topic:    "/mavros/local_position/pose"
     rel_alt_topic: "/mavros/global_position/rel_alt"
@@ -29,8 +32,20 @@ vision_geo_node:
     marker_lifetime_s: 0.0        # 0 = permanent (stay until RViz closed), >0 = seconds
     marker_size: 0.8              # sphere diameter in meters
     pixel_match_radius_px: 100.0  # pixel center distance to match same buoy across consecutive frames
-    track_exit_frames: 5          # missed frames before a track is committed to the map
+    track_exit_frames: 15         # missed frames before a track is dropped — keep > 1 s so a flashing light (1 s off) keeps its track
     min_obs_to_commit: 5          # min GPS frames accumulated before committing (rejects brief detections)
     map_merge_radius_m: 2.0       # GPS merge radius — small is safe since positions are averaged over frames
     show_window: true
     window_name: "vision_geo"
+    # mission order + per-class topics
+    order_topic: "/mission/order"         # vision starts on the first "UAV-GO..." message
+    wait_for_order: true                  # false = start detecting immediately (bench testing)
+    order_timeout: 3600.0                 # [s] give up waiting for "UAV-GO" and exit
+    target_topic_prefix: "/vision_geo/target/"   # PoseStamped per class (solvePnP, meters, closest one) → centering_red()
+    map_topic_prefix:    "/vision_geo/map/"      # + buoy_<red|green|entry|exit|off> (DetectedObjectArray, GPS)
+    pose_frame_id: "camera"
+    # buoy light state (Task 1): one map point per physical buoy, state from recent class history
+    state_window_s: 6.0                   # [s] light history kept per buoy (state changes show up within this time)
+    flash_gap_min_s: 0.6                  # [s] lit→lit gap counted as a flash (lights: 1 s on / 1 s off)
+    flash_gap_max_s: 1.6
+    solid_min_s: 3.0                      # [s] blue lit this long with no off → solid (EXIT)

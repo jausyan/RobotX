@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
+#include <map>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -11,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include <opencv2/calib3d.hpp>
 #include <opencv2/dnn.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -22,6 +25,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -76,12 +80,15 @@ public:
     float       confidence = 0.0f;
     float       cx = 0.0f, cy = 0.0f;              // last pixel center
     std::vector<std::pair<double, double>> enu_buf; // (east_m, north_m) map coords, pre-link
+    std::vector<std::pair<rclcpp::Time, int>> class_buf; // (stamp, class_id) light observations, pre-link
     int         frames_missing = 0;
     int         linked_buoy_id = -1;               // -1 until confirmed & linked
   };
 
-  // One entry per unique buoy in the GPS world map.
+  // One entry per PHYSICAL buoy in the GPS world map (any buoy class merges into it).
   // Position = running mean of EVERY observation across all passes (converges in place).
+  // State = light pattern from the recent class history: red / green / entry (flashing blue) /
+  //         exit (solid blue) / off / unknown (not enough history yet).
   struct BuoyMapPoint
   {
     int         buoy_id;
@@ -94,6 +101,8 @@ public:
     int         sighting_count = 0;                // distinct passes that confirmed it
     float       best_confidence = 0.0f;
     rclcpp::Time last_seen{0, 0, RCL_ROS_TIME};
+    std::deque<std::pair<rclcpp::Time, std::string>> light_hist;  // (stamp, "red"/"green"/"blue"/"off")
+    std::string state = "unknown";
   };
 
 private:
@@ -130,6 +139,19 @@ private:
   void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m,
                             float confidence, const rclcpp::Time & stamp);
   void publishMarkers();
+
+  // ── Buoy light state (Task 1) ────────────────────────────────────────────────
+  std::string lightColor(int class_id) const;   // "red"/"green"/"blue"/"off" from the class name
+  void addLightObservation(BuoyMapPoint & pt, int class_id, const rclcpp::Time & stamp);
+  void updateBuoyState(BuoyMapPoint & pt, const rclcpp::Time & stamp);
+  static std::tuple<float, float, float> stateColor(const std::string & state);
+
+  // ── Per-class topics ─────────────────────────────────────────────────────────
+  // solvePnP pose of the closest detection per class → /vision_geo/target/<class>
+  bool estimatePose(const Detection & det, cv::Mat & rvec, cv::Mat & tvec) const;
+  void publishTargets(const std::vector<Detection> & dets, const rclcpp::Time & stamp);
+  // confirmed buoys per state → /vision_geo/map/buoy_<state>
+  void publishBuoyMap(const rclcpp::Time & stamp);
 
   // ── Display ──────────────────────────────────────────────────────────────────
   void updateFps();
@@ -182,6 +204,16 @@ private:
   bool show_window_;
   std::string window_name_;
 
+  std::vector<double> object_size_m_;   // real object size per class, for solvePnP
+  std::vector<bool> is_geo_class_;      // per class: GPS-projected + mapped (Task 1 buoys only)
+  double state_window_s_;               // light history kept per buoy
+  double flash_gap_min_s_;              // lit-to-lit gap that counts as a flash (off phase)
+  double flash_gap_max_s_;
+  double solid_min_s_;                  // lit this long without off → solid (exit)
+  std::string target_topic_prefix_;
+  std::string map_topic_prefix_;
+  std::string pose_frame_id_;
+
   // ── Camera intrinsics ────────────────────────────────────────────────────────
   cv::Mat camera_matrix_;
   cv::Mat dist_coeffs_;
@@ -227,8 +259,19 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr rel_alt_sub_;
 
+  // target_pubs_ indexed by class id; state_pubs_ keyed by buoy state
+  std::vector<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr> target_pubs_;
+  std::map<std::string, rclcpp::Publisher<vision_msgs::msg::DetectedObjectArray>::SharedPtr> state_pubs_;
+
   // ── FPS ──────────────────────────────────────────────────────────────────────
   std::chrono::steady_clock::time_point fps_window_start_;
   std::size_t frames_in_window_ = 0;
   double fps_ = 0.0;
 };
+
+// Wait for expected_command on the mission topic (same behaviour as control's waitCommand(),
+// without the hold-position part). A message matches when it starts with expected_command
+// (case-insensitive), so "UAV-GO:RED:BLUE" matches "UAV-GO"; anything else is logged and ignored.
+// Returns true when the command arrived, false on timeout.
+bool waitCommand(const rclcpp::Node::SharedPtr & node, const std::string & expected_command = "UAV-GO",
+                 const std::string & topic = "/mission/order", double timeout = 3600.0);

@@ -1,24 +1,71 @@
 /**:
   ros__parameters:
     gate_centering:
-      test_mode: true              
+      test_mode: true
       takeoff_altitude: 2.0
       forward_distance: 3.0
-      gate_width: 1.5               
-      centering_tolerance: 0.15     
+      gate_width: 1.5
+      centering_tolerance: 0.15
       waypoint_tolerance: 0.3
-      control_mode: "velocity"      
-      max_velocity: 0.2             
-      proportional_gain: 0.5        
-      rotation_angle: 90.0          
-      
-      detection_range_min: 4.0      # Jarak minimum deteksi (meter) - LONG RANGE
-      detection_range_max: 8.0      # Jarak maksimum deteksi (meter) - LONG RANGE
-      roi_lateral: 3.0              # Lateral ROI width (meter) - lebih lebar untuk jarak jauh
-      cluster_epsilon: 0.15          
-      min_cluster_points: 5         # REDUCED untuk jarak jauh (point density lebih rendah)
-      min_pole_height: 0.5          
-      target_height: 0.75                    
+      control_mode: "velocity"
+      max_velocity: 0.2
+      proportional_gain: 0.5
+      rotation_angle: 90.0
 
-    
-      
+      detection_range_min: 4.0      
+      detection_range_max: 8.0      
+      roi_lateral: 3.0              
+      cluster_epsilon: 0.15
+      min_cluster_points: 5         
+      min_pole_height: 0.5
+      target_height: 0.75
+
+    # ── RobotX UAV mission (src/control/src/mission/control.cpp) 
+    mission:
+      takeoff_altitude: 20.0
+      hold_time: 1.0
+
+      # Task 1: survey point above the Safe Passage arena
+      survey_lat: -6.914744
+      survey_lon: 107.609810
+      survey_alt: 20.0             
+      survey_time: 600.0            
+
+      # Task 2 & 3: delivery
+      usv_alt: 20.0                
+      approach_alt: 10.0           # first centering altitude above the circle
+      drop_alt: 3.0                # final centering + drop altitude
+      task2_lat: -6.914800         # Task 2 platform (fly here, then center on the circle)
+      task2_lon: 107.609900
+      task3_lat: -6.914850         # Task 3 platform (the OTHER platform)
+      task3_lon: 107.609950
+
+    communication:
+      order_topic: "/mission/order"                 # "UAV-GO" / "UAV-GO:<TIN>:<CIRCLE>" / "UAV-HOLD"
+      usv_gps_topic: "/USV/global_position/global"
+      command_timeout: 600.0                        # [s] waitCommand() gives up → RTL
+
+    vision:
+      target_topic_prefix: "/vision_geo/target/"   # + circle_<color> → centering_red() (closest one)
+
+    centering_red:
+      speed_xy: 0.75
+      acc: 0.05
+      maxAccel: 0.20
+      X: 0.0
+      Y: 0.0
+      min_center_time: 0.2
+      max_center_pitch: 2.5
+      max_center_roll: 2.5
+      hover_pitch: 0.0
+      hover_roll: 0.0
+      centering_tolerance: 0.15
+      recovery_method: "local_pose"
+
+    servo:                         # PLACEHOLDERS — servo not mapped yet
+      channel_red: 9               # dropper holding the RED tin
+      channel_green: 10
+      channel_blue: 11
+      servo_buka: 1900             # release PWM
+      servo_tutup: 2200
+      signal_repeat: 3

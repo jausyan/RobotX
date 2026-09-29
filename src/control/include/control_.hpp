@@ -24,6 +24,7 @@
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <rcl_interfaces/msg/parameter_value.hpp>
 #include "math_.hpp"
@@ -96,11 +97,11 @@ void setMode(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, co
 
 void takeoff(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float takeoff_alt);
     /**
-     * Initiate the takeoff procedure for the drone. Set mode to GUIDED, arm the drone, and send the takeoff command.
+     * ArduPilot takeoff: set GUIDED, ask for confirmation, arm, send the takeoff command, wait for the altitude.
      * parameters:
      * - node: shared pointer to the DroneController node instance.
      * - rate: reference to the rclcpp::Rate object for controlling the loop rate.
-     * - takeoff_alt: float value representing the desired takeoff altitude
+     * - takeoff_alt: float value representing the desired takeoff altitude above home
      * 
      * returns:
      * - posee: reference to where the last drone position when this function is called, it will be modified to the last drone position when this function returns.
@@ -153,7 +154,7 @@ void land(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate);
 
 void safeLanding(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float descent_rate);
     /**
-     * Perform controlled safe landing with gradual descent in OFFBOARD mode.
+     * Perform controlled safe landing with gradual descent in GUIDED mode.
      * Much safer than using LAND mode which can be too fast and cause bouncing.
      * 
      * parameters:
@@ -409,5 +410,42 @@ void centering_red(
     std::string recovery_method = "local_pose",
     float centering_tolerance = 0.20,
     std::string topic = "/vision/red");
+
+struct MissionOrder {
+    std::string tin;     // 1st color, lowercase: which tin to drop  ("red"/"green"/"blue", empty if not sent)
+    std::string circle;  // 2nd color, lowercase: which circle to drop on (matches vision_geo "circle_<color>")
+};
+
+void pubCommand(const std::shared_ptr<DroneController>&node, const std::string &command_text, const std::string &topic = "/mission/order");
+    /**
+     * Publish a command string (e.g. "UAV-GO") on the mission topic. One publisher per topic is created
+     * on the first call and reused afterwards.
+     */
+
+bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string &expected_command = "UAV-GO", const std::string &topic = "/mission/order", float timeout = 60.0, bool hold_position = true, std::string *received = nullptr);
+    /**
+     * Wait for expected_command on the mission topic while holding the current position.
+     * Only listens while called. A message matches when it starts with expected_command (case-insensitive),
+     * so "UAV-GO:RED:BLUE" matches "UAV-GO"; anything else (e.g. "UAV-HOLD") is logged and ignored.
+     *
+     * parameters:
+     * - timeout: seconds before giving up.
+     * - hold_position: publish a hold setpoint at the pose captured when the wait started.
+     * - received: optional, filled with the full received command (uppercase), e.g. "UAV-GO:RED:BLUE".
+     *
+     * returns:
+     * - true when the command arrived, false on timeout.
+     */
+
+MissionOrder parseCommand(const std::string &command);
+    /**
+     * Split "UAV-GO:RED:BLUE" into tin = "red", circle = "blue" (empty if not present).
+     */
+
+void goToVehicle(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float alt, const std::string &topic = "/USV/global_position/global");
+    /**
+     * Capture the USV position once from topic, fly there with pushMission() + AUTO at alt,
+     * then switch back to GUIDED and hold.
+     */
 
 #endif // CONTROL__HPP

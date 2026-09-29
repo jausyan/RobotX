@@ -2,21 +2,27 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <cstring>
 #include <algorithm>
+#include <sstream>
+#include <map>
 
 namespace {
 std::string normalizeFlightMode(std::string mode) {
+    // ArduPilot Copter mode names; PX4-style names are mapped for compatibility
     std::transform(mode.begin(), mode.end(), mode.begin(), ::toupper);
-    if (mode == "RTL") {
-        return "AUTO.RTL";
+    if (mode == "OFFBOARD") {
+        return "GUIDED";
     }
-    if (mode == "LAND") {
-        return "AUTO.LAND";
+    if (mode == "AUTO.RTL") {
+        return "RTL";
     }
-    if (mode == "MISSION" || mode == "AUTO") {
-        return "AUTO.MISSION";
+    if (mode == "AUTO.LAND") {
+        return "LAND";
     }
-    if (mode == "LOITER" || mode == "HOLD") {
-        return "AUTO.LOITER";
+    if (mode == "MISSION" || mode == "AUTO.MISSION") {
+        return "AUTO";
+    }
+    if (mode == "HOLD" || mode == "AUTO.LOITER") {
+        return "LOITER";
     }
     return mode;
 }
@@ -260,150 +266,75 @@ float applyPrecisionStep(float command, float min_velocity, float max_velocity) 
 
 void takeoff(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float takeoff_alt) {
     /**
-     * Initiate the takeoff procedure for the drone. Set mode to OFFBOARD, arm the drone, and send the takeoff command.
-     * For PX4: Stream setpoint at high rate BEFORE switching to OFFBOARD mode
+     * ArduPilot takeoff: set GUIDED, confirm, arm, send the takeoff command and wait for the altitude.
      * parameters:
      * - node: shared pointer to the DroneController node instance.
      * - rate: reference to the rclcpp::Rate object for controlling the loop rate.
-     * - takeoff_alt: float value representing the desired takeoff altitude, this is based on the rangefinder reading.
-     * 
+     * - takeoff_alt: float value representing the desired takeoff altitude above home [m].
+     *
      * returns:
      * - posee: reference to where the last drone position when this function is called, it will be modified to the last drone position when this function returns.
-     * - rel_alt: float value representing the relative altitude to be maintained at the correct rangefinder reading.
      */
-    
+
     RCLCPP_INFO(node->get_logger(), "=== TAKEOFF ===");
-    RCLCPP_INFO(node->get_logger(), "Target altitude: %.2f meters", takeoff_alt);
-    
-    // Get current position - NO OFFSET CORRECTION, use raw local position Z
-    geometry_msgs::msg::PoseStamped target_pose = node->getCurrentLocalPose();
-    // Set target altitude directly from local position z + desired takeoff altitude
-    target_pose.pose.position.z = target_pose.pose.position.z + takeoff_alt;
-    
-    RCLCPP_INFO(node->get_logger(), "Current Z: %.3f m, Target Z: %.3f m", 
-                node->getCurrentLocalPose().pose.position.z, target_pose.pose.position.z);
-    
-    // PX4 CRITICAL: Stream setpoints BEFORE switching to OFFBOARD mode
-    // Send at least 100 setpoints at 20Hz (2 seconds) before mode switch
-    rclcpp::Rate fast_rate(20.0); // 20 Hz for PX4
-    for(int i = 0; i < 40 && rclcpp::ok(); i++) {
-        target_pose.header.stamp = node->now();
-        node->publishLocalPosition(target_pose);
-        rclcpp::spin_some(node);
-        fast_rate.sleep();
-    }
-    
-    RCLCPP_INFO(node->get_logger(), "Setting OFFBOARD mode...");
-    auto set_mode_request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
-    set_mode_request->custom_mode = "OFFBOARD";   
-    
-    if (node->isSetModeServiceReady()) {   
-        auto set_mode_result = node->setMode_(set_mode_request);   
-        if (rclcpp::spin_until_future_complete(node, set_mode_result) == rclcpp::FutureReturnCode::SUCCESS) {
-            auto result = set_mode_result.get();
-            if (result->mode_sent) {
-                RCLCPP_INFO(node->get_logger(), "OFFBOARD mode set");
-            } else {
-                RCLCPP_ERROR(node->get_logger(), "Failed to set OFFBOARD mode");
-                return;
-            }
-        } else {
-            RCLCPP_ERROR(node->get_logger(), "Failed to call SetMode service");
-            return;
-        }
-    }
-    
-    // Continue streaming while waiting
-    for(int i = 0; i < 10 && rclcpp::ok(); i++) {
-        target_pose.header.stamp = node->now();
-        node->publishLocalPosition(target_pose);
-        rclcpp::spin_some(node);
-        fast_rate.sleep();
-    }
-    
-    RCLCPP_INFO(node->get_logger(), "Arming vehicle...");
-    auto arm_request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
-    arm_request->value = true;
+    const double start_z = node->getCurrentLocalPose().pose.position.z;
+    const double target_z = start_z + takeoff_alt;
+    RCLCPP_INFO(node->get_logger(), "Current Z: %.3f m, Target Z: %.3f m", start_z, target_z);
 
-    if (node->isArmingServiceReady()) {
-        auto arm_result = node->arm_(arm_request);
-        if (rclcpp::spin_until_future_complete(node, arm_result) == rclcpp::FutureReturnCode::SUCCESS) {
-            auto result = arm_result.get();
-            if (result->success) {
-                RCLCPP_INFO(node->get_logger(), "Vehicle armed");
-            } else {
-                RCLCPP_ERROR(node->get_logger(), "Failed to arm: %s", result->result ? "true" : "false");
-                return;
-            }
-        } else {
-            RCLCPP_ERROR(node->get_logger(), "Failed to arm vehicle");
-            return;
-        }
-    }
+    setMode(node, rate, "GUIDED");
 
+    // confirm BEFORE arming — ArduPilot auto-disarms if it sits armed on the ground
     RCLCPP_INFO(node->get_logger(), "=== TAKEOFF CONFIRMATION ===");
-    RCLCPP_INFO(node->get_logger(), "takeoff 1 if yes ?");  
+    RCLCPP_INFO(node->get_logger(), "takeoff 1 if yes ?");
     int confirmation;
     std::cin >> confirmation;
-    
     if (confirmation != 1) {
         RCLCPP_WARN(node->get_logger(), "Takeoff cancelled by user");
         return;
     }
-    
-    // Continue streaming during arm
-    for(int i = 0; i < 10 && rclcpp::ok(); i++) {
-        target_pose.header.stamp = node->now();
-        node->publishLocalPosition(target_pose);
-        rclcpp::spin_some(node);
-        fast_rate.sleep();
+
+    arm(node, rate);
+
+    auto takeoff_request = std::make_shared<mavros_msgs::srv::CommandTOL::Request>();
+    takeoff_request->altitude = takeoff_alt;
+    auto takeoff_result = node->takeoff_(takeoff_request);
+    if (hasReplied(node, takeoff_result) && takeoff_result.get()->success) {
+        RCLCPP_INFO(node->get_logger(), "Takeoff command accepted, ascending to %.2f m...", takeoff_alt);
+    } else {
+        RCLCPP_ERROR(node->get_logger(), "Takeoff command rejected");
+        return;
     }
 
-    RCLCPP_INFO(node->get_logger(), "Ascending to %.2f meters...", takeoff_alt);
-    
-    // For PX4 OFFBOARD: Just stream position setpoints, no separate takeoff command needed
-    // The drone will automatically follow the z position setpoint
+    // ArduPilot flies the takeoff itself — do not stream setpoints, just wait for the altitude
     auto start_time = node->now();
     const rclcpp::Duration timeout_duration = rclcpp::Duration::from_seconds(30.0);
     bool reached = false;
-    double current_alt = 0.0;
+    double current_z = start_z;
 
     while (rclcpp::ok()) {
-        // Keep streaming setpoint at high rate (CRITICAL for PX4 OFFBOARD)
-        target_pose.header.stamp = node->now();
-        node->publishLocalPosition(target_pose);
-        
-        // Get current altitude - NO OFFSET, use raw local position Z
-        current_alt = node->getCurrentLocalPose().pose.position.z;
-        
-        if (fmod((node->now() - start_time).seconds(), 0.1) < 0.05) { // Log every ~1 second
-            RCLCPP_INFO(node->get_logger(), "Altitude: %.2f m / %.2f m (target)", 
-                        current_alt, target_pose.pose.position.z);
-        }
+        current_z = node->getCurrentLocalPose().pose.position.z;
+        RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
+            "Altitude: %.2f m / %.2f m (target)", current_z, target_z);
 
-        // Check if reached target altitude (direct comparison without offset)
-        if (fabs(target_pose.pose.position.z - current_alt) < 0.15) {
-            reached = true; 
+        if (current_z >= target_z - 0.15) {
+            reached = true;
             break;
         }
-
         if ((node->now() - start_time) > timeout_duration) {
-            RCLCPP_WARN(node->get_logger(), "Timeout waiting to reach takeoff altitude");
             break;
         }
-
         rclcpp::spin_some(node);
-        fast_rate.sleep(); // Keep streaming at 20Hz
+        rate.sleep();
     }
 
     if (reached) {
-        RCLCPP_INFO(node->get_logger(), "Reached takeoff altitude! (%.2f m)", current_alt);
+        RCLCPP_INFO(node->get_logger(), "Reached takeoff altitude! (%.2f m)", current_z);
     } else {
         RCLCPP_WARN(node->get_logger(), "Did not reach takeoff altitude within timeout");
     }
-    
+
     rate.sleep();
-    posee.pose.position.z = node->getCurrentLocalPose().pose.position.z;
+    posee = node->getCurrentLocalPose();
 }
 
 void takeoff_no_confirm(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float takeoff_alt) {
@@ -418,21 +349,10 @@ void takeoff_no_confirm(const std::shared_ptr<DroneController>&node, rclcpp::Rat
      * - posee: reference to where the last drone position when this function is called, it will be modified to the last drone position when this function returns.
      * - rel_alt: float value representing the relative altitude to be maintained at the correct rangefinder reading.
      */
-    // auto set_mode_request = std::make_shared<mavros_msgs::srv::SetMode::Request>();
-    // set_mode_request->custom_mode = "GUIDED";   
-    
+    setMode(node, rate, "GUIDED");
+
     auto arm_request = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
     arm_request->value = true;
-
-    // if (node->isSetModeServiceReady()) {   
-    //     auto set_mode_result = node->setMode_(set_mode_request);   
-    //     if (rclcpp::spin_until_future_complete(node, set_mode_result) == rclcpp::FutureReturnCode::SUCCESS) {
-    //         RCLCPP_INFO(node->get_logger(), "Set mode to GUIDED");
-    //     } else {
-    //         RCLCPP_ERROR(node->get_logger(), "Failed to call SetMode service");
-    //     }
-    // }
-    // rate.sleep();
 
     if (node->isArmingServiceReady()) {
         auto arm_result = node->arm_(arm_request);
@@ -2376,7 +2296,7 @@ void centering_red(
                 target.position = red_pos_global;
                 target.position.z = node->getCurrentLocalPose().pose.position.z;
                 target.orientation = drone_at_detection.pose.orientation;
-                moveToPoint(node, rate, drone_at_detection, target, 0.8, 0.1, false, false, false, false, true);
+                moveToPoint(node, rate, drone_at_detection, target, 0.8, 0.1, false, false, false, false);
                 hold_pose = node->getCurrentLocalPose();
             }
             hold_pose.header.stamp = node->now();
@@ -2389,4 +2309,118 @@ void centering_red(
     }
     node->publishLocalVelocity(zero(velocity_msg));
     RCLCPP_INFO(node->get_logger(), "RED centering finished. Status: %s", status ? "SUCCESS" : "FAILED");
+}
+
+void pubCommand(const std::shared_ptr<DroneController>&node, const std::string &command_text, const std::string &topic) {
+    static std::map<std::string, rclcpp::Publisher<std_msgs::msg::String>::SharedPtr> command_pubs;
+    if (command_pubs.find(topic) == command_pubs.end()) {
+        command_pubs[topic] = node->create_publisher<std_msgs::msg::String>(topic, 10);
+    }
+    std_msgs::msg::String msg;
+    msg.data = command_text;
+    command_pubs[topic]->publish(msg);
+    RCLCPP_INFO(node->get_logger(), "Published: '%s' to topic %s", command_text.c_str(), topic.c_str());
+}
+
+bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string &expected_command, const std::string &topic, float timeout, bool hold_position, std::string *received) {
+    auto toUpperTrim = [](std::string text) {
+        const auto first = text.find_first_not_of(" \t\r\n");
+        const auto last  = text.find_last_not_of(" \t\r\n");
+        text = (first == std::string::npos) ? "" : text.substr(first, last - first + 1);
+        std::transform(text.begin(), text.end(), text.begin(), ::toupper);
+        return text;
+    };
+
+    std::string received_command;
+    bool has_command = false;
+    auto sub = node->create_subscription<std_msgs::msg::String>(topic, 10,
+        [&](const std_msgs::msg::String::SharedPtr msg) {
+            received_command = msg->data;
+            has_command = true;
+        });
+
+    RCLCPP_INFO(node->get_logger(), "Waiting for '%s' on %s (timeout: %.0fs)...", expected_command.c_str(), topic.c_str(), timeout);
+
+    // capture current pose for holding position
+    geometry_msgs::msg::PoseStamped hold_pose = node->getCurrentLocalPose();
+    if (hold_position) {
+        RCLCPP_INFO(node->get_logger(), "Holding position at (%.2f, %.2f, %.2f)",
+            hold_pose.pose.position.x, hold_pose.pose.position.y, hold_pose.pose.position.z);
+    }
+
+    const std::string exp_cmd = toUpperTrim(expected_command);
+    const auto start_time = node->now();
+    rclcpp::Rate loop_rate(10.0);
+
+    while (rclcpp::ok()) {
+        // publish hold position setpoint to keep the drone stable
+        if (hold_position) {
+            hold_pose.header.stamp = node->now();
+            node->publishLocalPosition(hold_pose);
+        }
+
+        // check if command received
+        if (has_command) {
+            const std::string recv_cmd = toUpperTrim(received_command);
+            if (recv_cmd.rfind(exp_cmd, 0) == 0) {   // "UAV-GO:RED:BLUE" matches "UAV-GO"
+                RCLCPP_INFO(node->get_logger(), "Received command: %s", recv_cmd.c_str());
+                if (received) *received = recv_cmd;
+                return true;
+            }
+            RCLCPP_WARN(node->get_logger(), "Received unexpected command: %s (expected: %s)", recv_cmd.c_str(), exp_cmd.c_str());
+            has_command = false;   // reset and wait for the correct command
+        }
+
+        // check timeout
+        if ((node->now() - start_time).seconds() > timeout) {
+            RCLCPP_WARN(node->get_logger(), "Timeout waiting for '%s' after %.0fs", expected_command.c_str(), timeout);
+            return false;
+        }
+
+        rclcpp::spin_some(node);
+        loop_rate.sleep();
+    }
+    return false;
+}
+
+MissionOrder parseCommand(const std::string &command) {
+    MissionOrder order;
+    std::vector<std::string> parts;
+    std::stringstream ss(command);
+    std::string part;
+    while (std::getline(ss, part, ':')) {
+        std::transform(part.begin(), part.end(), part.begin(), ::tolower);
+        parts.push_back(part);
+    }
+    if (parts.size() >= 2) order.tin = parts[1];
+    if (parts.size() >= 3) order.circle = parts[2];
+    return order;
+}
+
+void goToVehicle(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float alt, const std::string &topic) {
+    // capture the USV position once
+    sensor_msgs::msg::NavSatFix usv;
+    bool received = false;
+    auto sub = node->create_subscription<sensor_msgs::msg::NavSatFix>(topic, rclcpp::SensorDataQoS(),
+        [&](const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
+            if (received) return;
+            usv = *msg;
+            received = true;
+        });
+
+    RCLCPP_INFO(node->get_logger(), "=== goToUSV: waiting for USV position on %s ===", topic.c_str());
+    while (rclcpp::ok() && !received) {
+        holdPosition(node, rate, posee, 1.0);
+    }
+    sub.reset();
+    RCLCPP_INFO(node->get_logger(), "goToUSV: USV at lat=%.7f lon=%.7f, flying at %.1f m",
+        usv.latitude, usv.longitude, alt);
+
+    clearMission(node);
+    pushMission(node, {create_waypoint(usv.latitude, usv.longitude, alt)});
+    setMode(node, rate, "AUTO");
+    waitForWP(node, rate, 1);
+    setMode(node, rate, "GUIDED");
+    holdPosition(node, rate, posee, 1.0);
+    RCLCPP_INFO(node->get_logger(), "goToUSV: arrived above USV");
 }

@@ -3,144 +3,229 @@
 #include "geo_.hpp"
 #include "drone_controller_.hpp"
 #include <iostream>
-#include <vector>
 #include <string>
-
 #define RATE 10.0
 
 float takeoff_altitude;
-float forward_distance;
-float gate_width;
-float centering_tolerance;
-float waypoint_tolerance;
-std::string control_mode;  
-float max_velocity;
-float proportional_gain;
-float rotation_angle; 
-float rotation_radians;
-
-float lateral_tolerance;
-float vertical_tolerance;
-int min_points_vertical;
-int min_points_horizontal;
-float max_time = 30.0;  // Default timeout for centering  
+float hold_time;
+double survey_lat;
+double survey_lon;
+float survey_alt;
+float survey_time;
+float usv_alt;
+float approach_alt;
+float drop_alt;
+double task2_lat;
+double task2_lon;
+double task3_lat;
+double task3_lon;
+std::string order_topic;
+std::string usv_gps_topic;
+float command_timeout;
+std::string target_topic_prefix;
+float speed_xy;
+float acc;
+float maxAccel;
+float X;
+float Y;
+float min_center_time;
+float max_center_pitch;
+float max_center_roll;
+float hover_pitch;
+float hover_roll;
+float centering_tolerance_red;
+std::string recovery_method;
+int channel_red;
+int channel_green;
+int channel_blue;
+int servo_buka;
+int signal_repeat;
+bool centered = false;
 
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     rclcpp::Rate rate(RATE);
     auto node = std::make_shared<DroneController>();
-    
-    node->declare_parameter<float>("gate_centering.takeoff_altitude", 2.0);
-    node->declare_parameter<float>("gate_centering.forward_distance", 3.0);
-    node->declare_parameter<float>("gate_centering.gate_width", 1.5);
-    node->declare_parameter<float>("gate_centering.centering_tolerance", 0.15);
-    node->declare_parameter<float>("gate_centering.waypoint_tolerance", 0.3);
-    node->declare_parameter<std::string>("gate_centering.control_mode", "velocity");
-    node->declare_parameter<float>("gate_centering.max_velocity", 0.2);
-    node->declare_parameter<float>("gate_centering.proportional_gain", 0.5);
-    node->declare_parameter<float>("gate_centering.rotation_angle", 90.0);
-    
-    // Clustering parameters
-    node->declare_parameter<float>("gate_centering.detection_range_min", 1.5);
-    node->declare_parameter<float>("gate_centering.detection_range_max", 2.5);
-    node->declare_parameter<float>("gate_centering.roi_lateral", 2.0);
-    node->declare_parameter<float>("gate_centering.cluster_epsilon", 0.15);
-    node->declare_parameter<int>("gate_centering.min_cluster_points", 10);
-    node->declare_parameter<float>("gate_centering.min_pole_height", 0.5);
-    node->declare_parameter<float>("gate_centering.target_height", 0.75);
 
-    
-    node->get_parameter("gate_centering.takeoff_altitude", takeoff_altitude);
-    node->get_parameter("gate_centering.forward_distance", forward_distance);
-    node->get_parameter("gate_centering.gate_width", gate_width);
-    node->get_parameter("gate_centering.centering_tolerance", centering_tolerance);
-    node->get_parameter("gate_centering.waypoint_tolerance", waypoint_tolerance);
-    node->get_parameter("gate_centering.control_mode", control_mode);
-    node->get_parameter("gate_centering.max_velocity", max_velocity);
-    node->get_parameter("gate_centering.proportional_gain", proportional_gain);
-    node->get_parameter("gate_centering.rotation_angle", rotation_angle);
-    rotation_radians = rotation_angle * M_PI / 180.0;
-    
-    RCLCPP_INFO(node->get_logger(), "=== Centering Basic ===");
-    RCLCPP_INFO(node->get_logger(), "Takeoff Alt: %.2f m", takeoff_altitude);
-    RCLCPP_INFO(node->get_logger(), "Forward Dist: %.2f m", forward_distance);
-    RCLCPP_INFO(node->get_logger(), "Lebar Gate: %.2f m", gate_width);
-    RCLCPP_INFO(node->get_logger(), "Centering Tolerance: %.2f m", centering_tolerance);
-    RCLCPP_INFO(node->get_logger(), "Control Mode: %s", control_mode.c_str());
-    if (control_mode == "velocity") {
-        RCLCPP_INFO(node->get_logger(), "Max Velocity: %.2f m/s", max_velocity);
-        RCLCPP_INFO(node->get_logger(), "Proportional Gain: %.2f", proportional_gain);
-    }
-    
+    node->declare_parameter<float>("mission.takeoff_altitude", 5.0);
+    node->declare_parameter<float>("mission.hold_time", 1.0);
+    node->declare_parameter<double>("mission.survey_lat", 0.0);
+    node->declare_parameter<double>("mission.survey_lon", 0.0);
+    node->declare_parameter<float>("mission.survey_alt", 18.0);
+    node->declare_parameter<float>("mission.survey_time", 60.0);
+    node->declare_parameter<float>("mission.usv_alt", 10.0);
+    node->declare_parameter<float>("mission.approach_alt", 10.0);
+    node->declare_parameter<float>("mission.drop_alt", 3.0);
+    node->declare_parameter<double>("mission.task2_lat", 0.0);
+    node->declare_parameter<double>("mission.task2_lon", 0.0);
+    node->declare_parameter<double>("mission.task3_lat", 0.0);
+    node->declare_parameter<double>("mission.task3_lon", 0.0);
+    node->declare_parameter<std::string>("communication.order_topic", "/mission/order");
+    node->declare_parameter<std::string>("communication.usv_gps_topic", "/USV/global_position/global");
+    node->declare_parameter<float>("communication.command_timeout", 600.0);
+    node->declare_parameter<std::string>("vision.target_topic_prefix", "/vision_geo/target/");
+    node->declare_parameter<float>("centering_red.speed_xy", 0.75);
+    node->declare_parameter<float>("centering_red.acc", 0.05);
+    node->declare_parameter<float>("centering_red.maxAccel", 0.20);
+    node->declare_parameter<float>("centering_red.X", 0.0);
+    node->declare_parameter<float>("centering_red.Y", 0.0);
+    node->declare_parameter<float>("centering_red.min_center_time", 0.2);
+    node->declare_parameter<float>("centering_red.max_center_pitch", 2.5);
+    node->declare_parameter<float>("centering_red.max_center_roll", 2.5);
+    node->declare_parameter<float>("centering_red.hover_pitch", 0.0);
+    node->declare_parameter<float>("centering_red.hover_roll", 0.0);
+    node->declare_parameter<float>("centering_red.centering_tolerance", 0.15);
+    node->declare_parameter<std::string>("centering_red.recovery_method", "local_pose");
+    node->declare_parameter<int>("servo.channel_red", 9);
+    node->declare_parameter<int>("servo.channel_green", 10);
+    node->declare_parameter<int>("servo.channel_blue", 11);
+    node->declare_parameter<int>("servo.servo_buka", 1900);
+    node->declare_parameter<int>("servo.signal_repeat", 3);
+
+    node->get_parameter("mission.takeoff_altitude", takeoff_altitude);
+    node->get_parameter("mission.hold_time", hold_time);
+    node->get_parameter("mission.survey_lat", survey_lat);
+    node->get_parameter("mission.survey_lon", survey_lon);
+    node->get_parameter("mission.survey_alt", survey_alt);
+    node->get_parameter("mission.survey_time", survey_time);
+    node->get_parameter("mission.usv_alt", usv_alt);
+    node->get_parameter("mission.approach_alt", approach_alt);
+    node->get_parameter("mission.drop_alt", drop_alt);
+    node->get_parameter("mission.task2_lat", task2_lat);
+    node->get_parameter("mission.task2_lon", task2_lon);
+    node->get_parameter("mission.task3_lat", task3_lat);
+    node->get_parameter("mission.task3_lon", task3_lon);
+    node->get_parameter("communication.order_topic", order_topic);
+    node->get_parameter("communication.usv_gps_topic", usv_gps_topic);
+    node->get_parameter("communication.command_timeout", command_timeout);
+    node->get_parameter("vision.target_topic_prefix", target_topic_prefix);
+    node->get_parameter("centering_red.speed_xy", speed_xy);
+    node->get_parameter("centering_red.acc", acc);
+    node->get_parameter("centering_red.maxAccel", maxAccel);
+    node->get_parameter("centering_red.X", X);
+    node->get_parameter("centering_red.Y", Y);
+    node->get_parameter("centering_red.min_center_time", min_center_time);
+    node->get_parameter("centering_red.max_center_pitch", max_center_pitch);
+    node->get_parameter("centering_red.max_center_roll", max_center_roll);
+    node->get_parameter("centering_red.hover_pitch", hover_pitch);
+    node->get_parameter("centering_red.hover_roll", hover_roll);
+    node->get_parameter("centering_red.centering_tolerance", centering_tolerance_red);
+    node->get_parameter("centering_red.recovery_method", recovery_method);
+    node->get_parameter("servo.channel_red", channel_red);
+    node->get_parameter("servo.channel_green", channel_green);
+    node->get_parameter("servo.channel_blue", channel_blue);
+    node->get_parameter("servo.servo_buka", servo_buka);
+    node->get_parameter("servo.signal_repeat", signal_repeat);
+
+    RCLCPP_INFO(node->get_logger(), "=== BISMILLAH ROBOTX UAV MISSION ===");
+    RCLCPP_INFO(node->get_logger(), "TAKEOFF ALT : %.2f m", takeoff_altitude);
+    RCLCPP_INFO(node->get_logger(), "SURVEY      : lat=%.7f lon=%.7f alt=%.1f m (%.0f s)", survey_lat, survey_lon, survey_alt, survey_time);
+    RCLCPP_INFO(node->get_logger(), "ORDER TOPIC : %s", order_topic.c_str());
+    RCLCPP_INFO(node->get_logger(), "USV TOPIC   : %s", usv_gps_topic.c_str());
+    RCLCPP_INFO(node->get_logger(), "DROP        : approach %.1f m, drop %.1f m", approach_alt, drop_alt);
+
     geometry_msgs::msg::PoseStamped posee;
+    std::string command;
+    MissionOrder order;
+    std::string target;
+    int channel;
     initFrame(node, posee);
-    
-    while(rclcpp::ok() && node->getCurrentLocalPose().pose.position.z == 0.0) {
+
+    while (rclcpp::ok() && node->getCurrentLocalPose().pose.position.z == 0.0) {
         RCLCPP_INFO(node->get_logger(), "Wait local pose data...");
         rclcpp::spin_some(node);
         rate.sleep();
     }
-    
+
     RCLCPP_INFO(node->get_logger(), "TAKING OFF.... %.2f meters...", takeoff_altitude);
-    takeoff(node, rate, posee, 15.0);
-    holdPosition(node, rate, posee, 10.0);
+    takeoff(node, rate, posee, takeoff_altitude);
+    holdPosition(node, rate, posee, hold_time);
 
-    RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
-    LocalMove(node, rate, posee, 25.0, 0.0, 0.0, 0.0, waypoint_tolerance, false);
-    holdPosition(node, rate, posee, 5.0);
+    // ============================== TASK 1 ======================================
+    TASK_1:
+    RCLCPP_INFO(node->get_logger(), "TASK 1: FLY TO SURVEY POINT");
+    clearMission(node);
+    pushMission(node, {create_waypoint(survey_lat, survey_lon, survey_alt)});
+    setMode(node, rate, "AUTO");
+    waitForWP(node, rate, 1);
+    setMode(node, rate, "GUIDED");
+    holdPosition(node, rate, posee, 1.0);
+    fix_alt(node, rate, posee, survey_alt, 0.3, 60.0);
+    holdPosition(node, rate, posee, 3.0);
+    RCLCPP_INFO(node->get_logger(), "TASK 1: SURVEY ALT REACHED, STARTING VISION...");
+    pubCommand(node, "UAV-GO", order_topic);
+    waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
+    RCLCPP_INFO(node->get_logger(), "TASK 1: MAPPING DONE, GOING TO USV POSE...");
+    goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
 
-    RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
-    LocalMove(node, rate, posee, 0.0, 5.0, 0.0, 0.0, waypoint_tolerance, false);
-    holdPosition(node, rate, posee, 5.0);
+    // ============================== TASK 2 ======================================
+    TASK_2:
+    RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
+    if (!waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command)) {
+        RCLCPP_ERROR(node->get_logger(), "=========== TASK 2: NO ORDER, RTL ===========");
+        setMode(node, rate, "rtl");
+        rclcpp::shutdown();
+        return 1;
+    }
+    order = parseCommand(command);
+    target = "circle_" + order.circle;
+    RCLCPP_INFO(node->get_logger(), "TASK 2: TIN %s → %s", order.tin.c_str(), target.c_str());
 
-    RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
-    LocalMove(node, rate, posee, -35.0, 0.0, 0.0, 0.0, waypoint_tolerance, false);
-    holdPosition(node, rate, posee, 5.0);
+    clearMission(node);
+    pushMission(node, {create_waypoint(task2_lat, task2_lon, approach_alt)});
+    setMode(node, rate, "AUTO");
+    waitForWP(node, rate, 1);
+    setMode(node, rate, "GUIDED");
+    holdPosition(node, rate, posee, 1.0);
+    holdPosition(node, rate, posee, hold_time);
 
-    // RCLCPP_INFO(node->get_logger(), "CENTERING ARTAG...");
-    // bool status = false;
-    // centering_artag(node, rate, 0.75, status, 0.05, 0.20, 0.30, 0.0, 0.2, 2.5, 2.5, 0.0, 0.0, "local_pose", 0.05);
-    // holdPosition(node, rate, posee, 2.0);
+    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    fix_alt(node, rate, posee, drop_alt);
+    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    if (centered) {
+        channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
+        controlServoRepeated(node, channel, servo_buka, signal_repeat);
+        holdPosition(node, rate, posee, hold_time);
+    } else {
+        RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
+    }
+    fix_alt(node, rate, posee, approach_alt);
 
-    // RCLCPP_INFO(node->get_logger(), "Step 4: Correcting heading...");
-    // correct_heading_artag(node, rate, status, 3.0, 0.5, 30.0);
-    // holdPosition(node, rate, posee, 2.0);
+    // ============================== TASK 3 ======================================
+    TASK_3:
+    RCLCPP_INFO(node->get_logger(), "TASK 3: WAITING FOR ORDER...");
+    if (!waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command)) {
+        RCLCPP_ERROR(node->get_logger(), "=========== TASK 3: NO ORDER, RTL ===========");
+        setMode(node, rate, "rtl");
+        rclcpp::shutdown();
+        return 1;
+    }
+    order = parseCommand(command);
+    target = "circle_" + order.circle;
+    RCLCPP_INFO(node->get_logger(), "TASK 3: TIN %s → %s", order.tin.c_str(), target.c_str());
 
-    // RCLCPP_INFO(node->get_logger(), "ROTATING... %.2f degrees...", 90.0);
-    // rotateByDegrees(node, rate, posee, 90.0);
-    // holdPosition(node, rate, posee, 2.0);
+    clearMission(node);
+    pushMission(node, {create_waypoint(task3_lat, task3_lon, approach_alt)});
+    setMode(node, rate, "AUTO");
+    waitForWP(node, rate, 1);
+    setMode(node, rate, "GUIDED");
+    holdPosition(node, rate, posee, 1.0);
+    holdPosition(node, rate, posee, hold_time);
 
-    // RCLCPP_INFO(node->get_logger(), "MOVE FORWARD to %.2f meters...", forward_distance);
-    // LocalMove(node, rate, posee, 3.0, 0.0, 0.0, 0.0, waypoint_tolerance);
-    // holdPosition(node, rate, posee, 5.0);
-
-    //centering_tag(node, rate, 0.1, 0.8);
-    // RCLCPP_INFO(node->get_logger(), "CNTERING TAG...");
-    // centering_tag(node, rate, 2000.0, 0.0, 10.0, 0.02, 120.0, true, 0.0);
-    // holdPosition(node, rate, posee, 2.0);
-
+    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    fix_alt(node, rate, posee, drop_alt);
+    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    if (centered) {
+        channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
+        controlServoRepeated(node, channel, servo_buka, signal_repeat);
+        holdPosition(node, rate, posee, hold_time);
+    } else {
+        RCLCPP_ERROR(node->get_logger(), "TASK 3: CENTERING FAILED - SKIP DROP..!!");
+    }
+    fix_alt(node, rate, posee, approach_alt);
+    RCLCPP_INFO(node->get_logger(), "ALL TASKS DONE, RTL...");
     setMode(node, rate, "rtl");
-
-    // RCLCPP_INFO(node->get_logger(), "ROTATING... %.2f degrees...", 90.0);
-    // rotateByDegrees(node, rate, posee, 90.0);
-    // holdPosition(node, rate, posee, 2.0);
-
-    // executeLocalWaypointMove(node, rate, posee, 2.0, 0.0, 0.0, 0.0, waypoint_tolerance);
-
-    // bool centering_status = false;
-    // RCLCPP_INFO(node->get_logger(), "CENTERING GATE...");
-    // centering_gate(node, rate, posee, gate_width, centering_tolerance, centering_status, 0.2, 0.5, 60.0, false, false);
-    // holdPosition(node, rate, posee, 2.0);
-    // if (centering_status) {
-    //     RCLCPP_INFO(node->get_logger(), "CENTERED TO GATE!");
-    //     executeLocalWaypointMove(node, rate, posee, 10.0, 0.0, 0.0, 0.0, waypoint_tolerance);
-    //     holdPosition(node, rate, posee, 2.0);
-    // } else {
-    //     RCLCPP_WARN(node->get_logger(), "CENTERING FAILED");
-    //     setMode(node, rate, "rtl");
-    // }
-    
-    RCLCPP_INFO(node->get_logger(), "================= Mission Complete =================");
+    RCLCPP_INFO(node->get_logger(), "=========== ALHAMDULILLAH MISSION COMPLETE ===========");
     rclcpp::shutdown();
     return 0;
 }

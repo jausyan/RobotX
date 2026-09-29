@@ -40,6 +40,7 @@ target_include_directories(vision_geo PRIVATE
 )
 
 target_link_libraries(vision_geo
+  /home/el-system/.local/opencv-4.10/lib/libopencv_calib3d.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_dnn.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_core.so
   /home/el-system/.local/opencv-4.10/lib/libopencv_highgui.so

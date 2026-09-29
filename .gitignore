@@ -21,3 +21,5 @@
 *.openvino
 *.xml
 *.bin
+CLAUDE.md
+.graphifyignore
