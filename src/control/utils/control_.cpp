@@ -2341,7 +2341,6 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
 
     RCLCPP_INFO(node->get_logger(), "Waiting for '%s' on %s (timeout: %.0fs)...", expected_command.c_str(), topic.c_str(), timeout);
 
-    // capture current pose for holding position
     geometry_msgs::msg::PoseStamped hold_pose = node->getCurrentLocalPose();
     if (hold_position) {
         RCLCPP_INFO(node->get_logger(), "Holding position at (%.2f, %.2f, %.2f)",
@@ -2353,13 +2352,11 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
     rclcpp::Rate loop_rate(10.0);
 
     while (rclcpp::ok()) {
-        // publish hold position setpoint to keep the drone stable
         if (hold_position) {
             hold_pose.header.stamp = node->now();
             node->publishLocalPosition(hold_pose);
         }
 
-        // check if command received
         if (has_command) {
             const std::string recv_cmd = toUpperTrim(received_command);
             if (recv_cmd.rfind(exp_cmd, 0) == 0) {   // "UAV-GO:RED:BLUE" matches "UAV-GO"
@@ -2368,10 +2365,9 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
                 return true;
             }
             RCLCPP_WARN(node->get_logger(), "Received unexpected command: %s (expected: %s)", recv_cmd.c_str(), exp_cmd.c_str());
-            has_command = false;   // reset and wait for the correct command
+            has_command = false;   
         }
 
-        // check timeout
         if ((node->now() - start_time).seconds() > timeout) {
             RCLCPP_WARN(node->get_logger(), "Timeout waiting for '%s' after %.0fs", expected_command.c_str(), timeout);
             return false;
@@ -2398,7 +2394,6 @@ MissionOrder parseCommand(const std::string &command) {
 }
 
 void goToVehicle(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float alt, const std::string &topic) {
-    // capture the USV position once
     sensor_msgs::msg::NavSatFix usv;
     bool received = false;
     auto sub = node->create_subscription<sensor_msgs::msg::NavSatFix>(topic, rclcpp::SensorDataQoS(),
@@ -2413,9 +2408,6 @@ void goToVehicle(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate
         holdPosition(node, rate, posee, 1.0);
     }
     sub.reset();
-    RCLCPP_INFO(node->get_logger(), "goToUSV: USV at lat=%.7f lon=%.7f, flying at %.1f m",
-        usv.latitude, usv.longitude, alt);
-
     clearMission(node);
     pushMission(node, {create_waypoint(usv.latitude, usv.longitude, alt)});
     setMode(node, rate, "AUTO");

@@ -161,22 +161,10 @@ int main(int argc, char **argv) {
     // ============================== TASK 2 ======================================
     TASK_2:
     RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
-    if (!waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command)) {
-        RCLCPP_ERROR(node->get_logger(), "=========== TASK 2: NO ORDER, RTL ===========");
-        setMode(node, rate, "rtl");
-        rclcpp::shutdown();
-        return 1;
-    }
+    waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command);
     order = parseCommand(command);
     target = "circle_" + order.circle;
     RCLCPP_INFO(node->get_logger(), "TASK 2: TIN %s → %s", order.tin.c_str(), target.c_str());
-
-    clearMission(node);
-    pushMission(node, {create_waypoint(task2_lat, task2_lon, approach_alt)});
-    setMode(node, rate, "AUTO");
-    waitForWP(node, rate, 1);
-    setMode(node, rate, "GUIDED");
-    holdPosition(node, rate, posee, 1.0);
     holdPosition(node, rate, posee, hold_time);
 
     centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
