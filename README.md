@@ -1,7 +1,7 @@
 # RobotX 2026 — UAV Control 
 ***CLAUDE ❤️ El Jausyan***
 
-ROS 2 (Humble) workspace for the RobotX UAV, flown on **ArduPilot** through MAVROS.
+ROS 2 Jazzy workspace for the RobotX UAV, flown on **ArduPilot** through MAVROS.
 Two packages do the work:
 
 | Package | What it does |
