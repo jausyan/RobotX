@@ -25,6 +25,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <rcl_interfaces/msg/parameter_value.hpp>
 #include "math_.hpp"
@@ -95,7 +96,7 @@ void setParam(const std::shared_ptr<DroneController>&node, const std::string &id
 
 void setMode(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, const std::string mode);
 
-void takeoff(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float takeoff_alt);
+void takeoff(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float takeoff_alt, bool confirm = true);
     /**
      * ArduPilot takeoff: set GUIDED, ask for confirmation, arm, send the takeoff command, wait for the altitude.
      * parameters:
@@ -427,6 +428,7 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
      * Wait for expected_command on the mission topic while holding the current position.
      * Only listens while called. A message matches when it starts with expected_command (case-insensitive),
      * so "UAV-GO:RED:BLUE" matches "UAV-GO"; anything else (e.g. "UAV-HOLD") is logged and ignored.
+     * On a match it publishes "ACK:<command>" so uav_bridge stops re-sending that order.
      *
      * parameters:
      * - timeout: seconds before giving up.
@@ -435,6 +437,19 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
      *
      * returns:
      * - true when the command arrived, false on timeout.
+     */
+
+// rx_msgs/RxTask values, reported as current_task in the heartbeat (via uav_bridge)
+constexpr uint8_t TASK_NONE = 1;
+constexpr uint8_t TASK_SAFE_PASSAGE = 2;
+constexpr uint8_t TASK_INFRA_SURVEY_REPAIR = 3;
+constexpr uint8_t TASK_COORDINATED_LOGISTICS = 4;
+
+void setTask(const std::shared_ptr<DroneController>&node, uint8_t task, const std::string &topic = "/mission/current_task");
+    /**
+     * Report the task in progress (TASK_* above). Call it when a task starts, and TASK_NONE when it ends:
+     * the team rules say a change INTO a task starts the attempt and a change to TASK_NONE ends it.
+     * Latched topic, so uav_bridge always has the latest value.
      */
 
 MissionOrder parseCommand(const std::string &command);

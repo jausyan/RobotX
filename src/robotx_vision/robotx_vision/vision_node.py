@@ -1,23 +1,35 @@
 #!/usr/bin/env python3
-"""RobotX UAV vision node (real-drone port of the ArduPilot simulation scripts).
+"""RobotX UAV vision node (Python twin of vision_geo — same topics, same behaviour).
 
-Driven entirely by String messages on the order topic (default /mission/order):
+Driven by String messages on the order topic (default /mission/order).
+The mission is chosen from the message CONTENT, so repeated orders are harmless:
 
-  UAV-GO #1  -> MISSION 1: run the task1 model, map the lights (incl. blinking),
-                publish one DetectedObjectArray per class. After
-                `task1.mapping_time_s` it publishes "MISSION-DONE" on the order
-                topic (the C++ node waits for it) and goes idle.
-  UAV-GO #2  -> MISSION 2: run the task2 model, publish circle_* / tin_* /
-                green_light detections (geo-referenced).
-  UAV-GO #3  -> MISSION 3: same as mission 2.
+  "UAV-GO"               -> MISSION 1 (only from idle): task1 model, buoy map.
+                            Keeps mapping until a delivery order arrives
+                            (MISSION-DONE comes from the GCS, not from vision).
+  "UAV-GO:<TIN>:<CIRCLE>" -> MISSION 2/3: task2 model, centering targets.
+                            The same order again is ignored; a different one
+                            starts the next delivery.
+                            task23.delivery_trigger = 'ack' (default): start on
+                            control's "ACK:UAV-GO:<TIN>:<CIRCLE>", i.e. when control
+                            really starts the delivery (uav_bridge may queue an
+                            order while Task 1 is still running). 'order': start on
+                            the order itself (bench tests without control).
 
 While idle nothing is inferred and nothing is published.
 
-Output topics: <target_prefix><name>, e.g. /vision_geo/target/circle_red,
-/vision_geo/target/tin_blue, /vision_geo/target/green_light, type
-vision_msgs/DetectedObjectArray. `altitude_m` is the drone's height above the
-target plane used for the projection; north/east_offset_m are metres from the
-drone to the object.
+Output topics (identical to vision_geo):
+  /vision_geo/target/<class>        geometry_msgs/PoseStamped, every frame per class of
+                                    the active model: closest detection, camera frame
+                                    x = right, y = down, z = height (m); zeros = not seen.
+                                    centering_red() reads this.
+  /vision_geo/map/buoy_<state>      vision_msgs/DetectedObjectArray, MISSION 1, every
+                                    frame: red / green / entry / exit / off.
+  /vision_geo/detections            vision_msgs/DetectedObjectArray, raw detections
+                                    of the frame with lat/lon.
+
+Optional GStreamer stream (same as vision_hailo): annotated frames as RTP/H.264
+over UDP to stream.stream_host:stream.stream_port.
 """
 import math
 import os
@@ -28,6 +40,7 @@ import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import (HistoryPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
@@ -38,7 +51,7 @@ from vision_msgs.msg import DetectedObject, DetectedObjectArray
 
 from .geo import (body_to_ne, latlon_to_offset, norm_label, offset_to_latlon,
                   parse_order, pixel_to_body, topic_suffix)
-from .light_mapper import BLINK, LightMapper
+from .light_mapper import STATES, LightMapper
 
 Pose = namedtuple('Pose', 'lat lon agl heading')
 
@@ -60,42 +73,55 @@ class VisionNode(Node):
         self.target_height = float(g('geo.target_height_m'))
         self.max_age = float(g('geo.max_sensor_age_s'))
         self.mapping_time = float(g('task1.mapping_time_s'))
+        self.publish_done = bool(g('task1.publish_mission_done'))
         self.only_ordered = bool(g('task23.only_publish_ordered'))
         self.active_timeout = float(g('task23.active_timeout_s'))
+        self.delivery_trigger = str(g('task23.delivery_trigger')).lower()
         self.publish_debug = bool(g('topics.publish_debug'))
         self.prefix = g('topics.target_prefix').rstrip('/') + '/'
+        self.map_prefix = g('topics.map_prefix').rstrip('/') + '/'
+        self.frame_id = g('topics.pose_frame_id')
+        self.stream_cfg = {k: g('stream.' + k) for k in (
+            'enable_stream', 'stream_host', 'stream_port', 'stream_width',
+            'stream_height', 'stream_fps', 'stream_bitrate_kbps')}
+        self.stream_writer = None
+        self.stream_ready = False      # pipeline tried once (like vision_hailo)
 
         # ---- models ---------------------------------------------------------
         self.bridge = CvBridge()
         self.model1 = self._load(g('model.task1_weights'))
         self.model2 = self._load(g('model.task2_weights'))
-        self.blink_id = next((i for i, n in self.model1.names.items()
-                              if topic_suffix(n) == BLINK), -1)
 
         self.mapper = LightMapper(
             self.get_logger(),
             dist_tol_m=float(g('task1.dist_tol_m')),
             dedup_tol_m=float(g('task1.dedup_tol_m')),
-            blink_min_s=float(g('task1.blink_min_s')),
-            blink_max_s=float(g('task1.blink_max_s')))
+            state_window_s=float(g('task1.state_window_s')),
+            flash_gap_min_s=float(g('task1.flash_gap_min_s')),
+            flash_gap_max_s=float(g('task1.flash_gap_max_s')),
+            solid_min_s=float(g('task1.solid_min_s')))
 
         # ---- mission state ----------------------------------------------------
-        self.next_mission = int(g('mission.start_index'))   # started by next UAV-GO
-        self.active = 0                                      # 0 = idle
+        self.active = 0                 # 0 = idle, 1 = mapping, 2/3 = delivery
         self.mission_t0 = 0.0
-        self.order = (None, None)                            # (tin, circle)
+        self.order = (None, None)       # (tin, circle)
         self.last_meta = None
 
         # ---- sensors ----------------------------------------------------------
         self.lat = self.lon = self.rel_alt = self.hdg = None
+        self.home = None                # first GPS fix: origin of the map offsets
         self.t_gps = self.t_alt = self.t_hdg = 0.0
 
         # ---- publishers / subscribers ----------------------------------------
-        self.pubs = {}
-        labels = {topic_suffix(n) for m in (self.model1, self.model2)
-                  for n in m.names.values()} | {BLINK}
-        for s in sorted(labels):          # create up-front so DDS discovery is done
-            self._get_pub(s)
+        # created up-front so DDS discovery is done before the first frame
+        self.classes = {1: sorted({topic_suffix(n) for n in self.model1.names.values()}),
+                        2: sorted({topic_suffix(n) for n in self.model2.names.values()})}
+        self.pose_pubs = {s: self.create_publisher(PoseStamped, self.prefix + s, 10)
+                          for s in set(self.classes[1]) | set(self.classes[2])}
+        self.map_pubs = {s: self.create_publisher(DetectedObjectArray,
+                                                  self.map_prefix + 'buoy_' + s, 10)
+                         for s in STATES}
+        self.det_pub = self.create_publisher(DetectedObjectArray, g('topics.detections'), 10)
         self.order_pub = self.create_publisher(String, g('topics.order'), 10)
         self.debug_pub = self.create_publisher(Image, g('topics.debug_image'), 10)
 
@@ -109,8 +135,8 @@ class VisionNode(Node):
         self.create_timer(0.1, self._tick)
 
         self.get_logger().info(
-            f'Vision node ready. Waiting for UAV-GO on {g("topics.order")} '
-            f'(next mission: {self.next_mission}). Targets -> {self.prefix}<name>')
+            f'Vision node ready. Waiting for UAV-GO on {g("topics.order")}. '
+            f'Targets -> {self.prefix}<class> (PoseStamped), map -> {self.map_prefix}buoy_<state>')
 
     # ======================================================================
     # Parameters / setup helpers
@@ -126,9 +152,20 @@ class VisionNode(Node):
         d('topics.rel_alt', '/mavros/global_position/rel_alt')   # Float64, m above home
         d('topics.heading', '/mavros/global_position/compass_hdg')  # Float64, deg CW from N
         d('topics.order', '/mission/order')                      # String
-        d('topics.target_prefix', '/vision_geo/target/')
+        d('topics.target_prefix', '/vision_geo/target/')         # PoseStamped per class
+        d('topics.map_prefix', '/vision_geo/map/')               # buoy_<state> arrays
+        d('topics.detections', '/vision_geo/detections')
+        d('topics.pose_frame_id', 'camera')
         d('topics.debug_image', '/vision_geo/debug_image')
         d('topics.publish_debug', True)
+        # GStreamer stream (same params as vision_hailo)
+        d('stream.enable_stream', False)
+        d('stream.stream_host', '192.168.0.127')
+        d('stream.stream_port', 5000)
+        d('stream.stream_width', 640)
+        d('stream.stream_height', 480)
+        d('stream.stream_fps', 30)
+        d('stream.stream_bitrate_kbps', 500)
         d('model.task1_weights', os.path.join(share, 'weights', 'task1.pt'))
         d('model.task2_weights', os.path.join(share, 'weights', 'task2.pt'))
         d('model.conf', 0.25)
@@ -143,14 +180,17 @@ class VisionNode(Node):
         d('camera.yaw_offset_deg', 0.0)   # camera "up" vs drone nose, CW positive
         d('geo.target_height_m', 0.0)     # height of the target plane above home
         d('geo.max_sensor_age_s', 1.0)
-        d('task1.mapping_time_s', 60.0)   # keep equal to mission.survey_time
-        d('task1.dist_tol_m', 3.0)
+        d('task1.publish_mission_done', False)   # True = old behaviour (self MISSION-DONE)
+        d('task1.mapping_time_s', 60.0)          # only used with publish_mission_done
+        d('task1.dist_tol_m', 2.0)
         d('task1.dedup_tol_m', 1.5)
-        d('task1.blink_min_s', 0.3)
-        d('task1.blink_max_s', 3.0)
+        d('task1.state_window_s', 6.0)
+        d('task1.flash_gap_min_s', 0.6)
+        d('task1.flash_gap_max_s', 1.6)
+        d('task1.solid_min_s', 3.0)
         d('task23.only_publish_ordered', False)
-        d('task23.active_timeout_s', 0.0)  # 0 = stay active until next UAV-GO
-        d('mission.start_index', 1)        # 1..3, which mission the next UAV-GO starts
+        d('task23.active_timeout_s', 0.0)  # 0 = stay active until the next order
+        d('task23.delivery_trigger', 'ack')  # 'ack' = control's ACK:UAV-GO:..., 'order' = the order
 
     def _get(self, name):
         return self.get_parameter(name).value
@@ -169,13 +209,6 @@ class VisionNode(Node):
         self.get_logger().info(f'Loaded {path}: {list(model.names.values())}')
         return model
 
-    def _get_pub(self, suffix):
-        pub = self.pubs.get(suffix)
-        if pub is None:
-            pub = self.create_publisher(DetectedObjectArray, self.prefix + suffix, 10)
-            self.pubs[suffix] = pub
-        return pub
-
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
@@ -188,6 +221,8 @@ class VisionNode(Node):
         if not (math.isfinite(msg.latitude) and math.isfinite(msg.longitude)):
             return
         self.lat, self.lon, self.t_gps = msg.latitude, msg.longitude, self._now()
+        if self.home is None:
+            self.home = (self.lat, self.lon)
 
     def alt_cb(self, msg):
         if math.isfinite(msg.data):
@@ -207,36 +242,56 @@ class VisionNode(Node):
         return Pose(self.lat, self.lon, agl, self.hdg)
 
     # ======================================================================
-    # Mission sequencing (/mission/order)
+    # Mission sequencing (/mission/order) — decided by content, not by count
     # ======================================================================
     def order_cb(self, msg):
         text = msg.data.strip()
-        up = text.upper()
-        if 'MISSION-DONE' in up or 'UAV-GO' not in up:
-            return                      # includes our own MISSION-DONE echo
-        n = self.next_mission
+        acked = text.upper().startswith('ACK:')
+        if acked:
+            text = text[4:].strip()
+        if not text.upper().startswith('UAV-GO'):
+            return                              # MISSION-DONE, RUN-START, UAV-HOLD, ...
+        tin, circle = parse_order(text)
+        if tin and circle and acked != (self.delivery_trigger == 'ack'):
+            return                              # delivery starts on the configured trigger only
+        if acked and not (tin and circle):
+            return
+
+        if not (tin and circle):                # plain "UAV-GO" -> mapping
+            if self.active != 0:
+                return                          # repeat / late GO: keep current mission
+            self.mapper.reset()
+            self._start(1)
+            self.get_logger().info('MISSION 1 START: buoy mapping')
+            return
+
+        if self.active in (2, 3) and self.order == (tin, circle):
+            return                              # same order again
+        n = 2 if self.active in (0, 1) else 3
+        self.order = (tin, circle)
+        self._start(n)
+        self.get_logger().info(f'MISSION {n} START: order="{text}" -> tin={tin}, circle={circle}')
+
+    def _start(self, n):
+        if self.active != 0:
+            self._publish_lost(self.classes[1 if self.active == 1 else 2])
         self.active = n
         self.mission_t0 = self._now()
-        self.next_mission = min(n + 1, 3)
-        if n == 1:
-            self.mapper.reset()
-            self.get_logger().info(f'MISSION 1 START: mapping for {self.mapping_time:.0f}s')
-        else:
-            self.order = parse_order(text)
-            self.get_logger().info(
-                f'MISSION {n} START: order="{text}" -> tin={self.order[0]}, '
-                f'circle={self.order[1]}')
+
+    def _stop(self):
+        self._publish_lost(self.classes[1 if self.active == 1 else 2])
+        self.active = 0
 
     def _tick(self):
         if self.active == 0:
             return
         elapsed = self._now() - self.mission_t0
-        if self.active == 1 and elapsed >= self.mapping_time:
+        if self.active == 1 and self.publish_done and elapsed >= self.mapping_time:
             self._finish_mission1()
         elif (self.active in (2, 3) and self.active_timeout > 0
               and elapsed >= self.active_timeout):
             self.get_logger().info(f'MISSION {self.active} timeout -> idle')
-            self.active = 0
+            self._stop()
 
     def _finish_mission1(self):
         self._publish_map()
@@ -245,7 +300,7 @@ class VisionNode(Node):
             self.get_logger().info(f'MISSION 1 DONE. Map: {counts}')
         else:
             self.get_logger().warning(f'MISSION 1 DONE but map looks incomplete: {counts}')
-        self.active = 0
+        self._stop()
         self.order_pub.publish(String(data='MISSION-DONE'))
 
     # ======================================================================
@@ -269,8 +324,16 @@ class VisionNode(Node):
                 stamp = self.get_clock().now().to_msg()
             meta = (stamp, msg.header.frame_id, pose)
             self.last_meta = meta
-            overlay = (self._mission1(dets, meta) if self.active == 1
-                       else self._mission23(dets, meta))
+
+            self._publish_detections(dets, meta)
+            self._publish_targets(dets, meta)
+            if self.active == 1:
+                pairs = self.mapper.update(dets, self._now())
+                self._publish_map(meta)
+                state = {id(d): 'buoy_' + t['state'] for d, t in pairs}
+                overlay = [(state.get(id(d), d['label']), d) for d in dets]
+            else:
+                overlay = [(d['label'], d) for d in dets]
             self._debug(frame, overlay)
         except Exception as exc:   # keep the node alive in flight
             self.get_logger().error(f'Frame processing failed: {exc!r}',
@@ -297,10 +360,12 @@ class VisionNode(Node):
             fwd, right = pixel_to_body(u, v, fx, fy, cx, cy, pose.agl)
             north, east = body_to_ne(fwd, right, heading)
             lat, lon = offset_to_latlon(pose.lat, pose.lon, north, east)
-            dets.append({'label': norm_label(names[int(c)]), 'class_id': int(c),
+            dets.append({'label': topic_suffix(norm_label(names[int(c)])), 'class_id': int(c),
                          'conf': float(s), 'u': float(u), 'v': float(v),
-                         'w': float(w), 'h': float(h), 'north': float(north),
-                         'east': float(east), 'lat': lat, 'lon': lon})
+                         'w': float(w), 'h': float(h),
+                         'fwd': float(fwd), 'right': float(right),
+                         'north': float(north), 'east': float(east),
+                         'lat': lat, 'lon': lon})
         return dets
 
     # ---- message builders ---------------------------------------------------
@@ -320,68 +385,122 @@ class VisionNode(Node):
         arr.header.stamp, arr.header.frame_id = stamp, frame_id
         return arr
 
-    # ---- mission 1 --------------------------------------------------------------
-    def _mission1(self, dets, meta):
-        pairs = self.mapper.update(dets, self._now())
-        self._publish_map(meta)
-        final = {id(d): t['final'] for d, t in pairs}
-        return [(final.get(id(d), d['label']), d) for d in dets]
+    def _pose_msg(self, stamp, x=0.0, y=0.0, z=0.0):
+        p = PoseStamped()
+        p.header.stamp, p.header.frame_id = stamp, self.frame_id
+        p.pose.position.x, p.pose.position.y, p.pose.position.z = float(x), float(y), float(z)
+        p.pose.orientation.w = 1.0
+        return p
 
-    def _publish_map(self, meta=None):
-        meta = meta or self.last_meta
-        if meta is None:
-            return
-        stamp, frame_id, pose = meta
-        for label, targets in self.mapper.snapshot().items():
-            arr = self._array(stamp, frame_id)
-            for t in targets:
-                north, east = latlon_to_offset(pose.lat, pose.lon, t['lat'], t['lon'])
-                cid = self.blink_id if label == BLINK else t['class_id']
-                arr.objects.append(self._obj(stamp, frame_id, label, cid, t['conf'],
-                                             t['u'], t['v'], t['lat'], t['lon'],
-                                             pose.agl, north, east))
-            self._get_pub(label).publish(arr)
-
-    # ---- missions 2 & 3 ---------------------------------------------------------
-    def _mission23(self, dets, meta):
-        stamp, frame_id, pose = meta
-        groups = {}
+    # ---- /vision_geo/detections: raw detections of this frame ----------------
+    def _publish_detections(self, dets, meta):
+        stamp, _, pose = meta
+        arr = self._array(stamp, 'map')
         for d in dets:
-            groups.setdefault(topic_suffix(d['label']), []).append(d)
+            arr.objects.append(self._obj(stamp, 'map', d['label'], d['class_id'], d['conf'],
+                                         d['u'], d['v'], d['lat'], d['lon'], pose.agl,
+                                         d['north'], d['east']))
+        self.det_pub.publish(arr)
 
+    # ---- /vision_geo/target/<class>: closest detection, zeros when not seen ---
+    def _publish_targets(self, dets, meta):
+        stamp, _, pose = meta
         tin, circle = self.order
         allowed = ({f'circle_{circle}', f'tin_{tin}'}
-                   if self.only_ordered and tin and circle else None)
-        overlay = []
-        for suffix, items in groups.items():
-            if allowed is not None and suffix not in allowed:
-                continue
-            items.sort(key=lambda d: d['w'] * d['h'], reverse=True)   # largest first
-            arr = self._array(stamp, frame_id)
-            for d in items:
-                arr.objects.append(self._obj(
-                    stamp, frame_id, suffix, d['class_id'], d['conf'], d['u'], d['v'],
-                    d['lat'], d['lon'], pose.agl, d['north'], d['east']))
-                overlay.append((suffix, d))
-            self._get_pub(suffix).publish(arr)
-        return overlay
+                   if self.active in (2, 3) and self.only_ordered and tin and circle else None)
+        for suffix in self.classes[1 if self.active == 1 else 2]:
+            best = None
+            if allowed is None or suffix in allowed:
+                hits = [d for d in dets if d['label'] == suffix]
+                if hits:
+                    best = min(hits, key=lambda d: math.hypot(d['fwd'], d['right']))
+            if best is None:
+                self.pose_pubs[suffix].publish(self._pose_msg(stamp))
+            else:
+                # camera frame like vision_geo's solvePnP: x = right, y = down, z = height
+                self.pose_pubs[suffix].publish(
+                    self._pose_msg(stamp, best['right'], -best['fwd'], pose.agl))
 
-    # ---- debug overlay -------------------------------------------------------------
-    def _debug(self, frame, overlay):
-        if not self.publish_debug or self.debug_pub.get_subscription_count() == 0:
+    def _publish_lost(self, suffixes):
+        stamp = self.get_clock().now().to_msg()
+        for s in suffixes:
+            self.pose_pubs[s].publish(self._pose_msg(stamp))
+
+    # ---- /vision_geo/map/buoy_<state>: Task 1 map, whole map every frame -----
+    def _publish_map(self, meta=None):
+        meta = meta or self.last_meta
+        if meta is None or self.home is None:
             return
+        stamp = meta[0]
+        for state, targets in self.mapper.snapshot().items():
+            arr = self._array(stamp, 'map')
+            for t in targets:
+                north, east = latlon_to_offset(self.home[0], self.home[1], t['lat'], t['lon'])
+                arr.objects.append(self._obj(stamp, 'map', 'buoy_' + state, t['id'], t['conf'],
+                                             0.0, 0.0, t['lat'], t['lon'], 0.0, north, east))
+            self.map_pubs[state].publish(arr)
+
+    # ---- debug image + GStreamer stream ------------------------------------------
+    def _debug(self, frame, overlay):
+        want_topic = self.publish_debug and self.debug_pub.get_subscription_count() > 0
+        want_stream = self._ensure_stream()
+        if not (want_topic or want_stream):
+            return
+        img = self._annotate(frame, overlay)
+        if want_topic:
+            self.debug_pub.publish(self.bridge.cv2_to_imgmsg(img, encoding='bgr8'))
+        if want_stream:
+            c = self.stream_cfg
+            if img.shape[1] != c['stream_width'] or img.shape[0] != c['stream_height']:
+                img = cv2.resize(img, (c['stream_width'], c['stream_height']))
+            self.stream_writer.write(img)
+
+    def _ensure_stream(self):
+        """Open the GStreamer pipeline once (same pipeline as vision_hailo)."""
+        c = self.stream_cfg
+        if not c['enable_stream']:
+            return False
+        if self.stream_ready:
+            return self.stream_writer is not None
+        self.stream_ready = True
+        pipeline = (
+            'appsrc is-live=true do-timestamp=true format=time ! '
+            f'video/x-raw,format=BGR,width={c["stream_width"]},height={c["stream_height"]},'
+            f'framerate={c["stream_fps"]}/1 ! '
+            'videoconvert ! '
+            f'x264enc tune=zerolatency bitrate={c["stream_bitrate_kbps"]} '
+            f'speed-preset=superfast key-int-max={c["stream_fps"]} byte-stream=true ! '
+            'rtph264pay config-interval=1 pt=96 ! '
+            f'udpsink host={c["stream_host"]} port={c["stream_port"]} sync=false async=false')
+        writer = cv2.VideoWriter(pipeline, cv2.CAP_GSTREAMER, 0, float(c['stream_fps']),
+                                 (c['stream_width'], c['stream_height']), True)
+        if not writer.isOpened():
+            self.get_logger().error(
+                f'Failed to open GStreamer stream pipeline. Disabling stream. Pipeline: {pipeline}')
+            c['enable_stream'] = False
+            return False
+        self.stream_writer = writer
+        self.get_logger().info(
+            f'Streaming enabled to udp://{c["stream_host"]}:{c["stream_port"]} '
+            f'({c["stream_width"]}x{c["stream_height"]} @ {c["stream_fps"]} fps)')
+        return True
+
+    def _annotate(self, frame, overlay):
         img = frame.copy()
+        h, w = img.shape[:2]
+        cv2.line(img, (0, h // 2), (w, h // 2), (0, 255, 0), 1)       # crosshair
+        cv2.line(img, (w // 2, 0), (w // 2, h), (0, 255, 0), 1)
         for label, d in overlay:
             x1, y1 = int(d['u'] - d['w'] / 2), int(d['v'] - d['h'] / 2)
             x2, y2 = int(d['u'] + d['w'] / 2), int(d['v'] + d['h'] / 2)
-            hot = label == BLINK
+            hot = label in ('buoy_entry', 'buoy_exit')
             color = (0, 0, 255) if hot else (0, 255, 0)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2 if hot else 1)
-            cv2.putText(img, label.upper() if hot else label, (x1, max(12, y1 - 5)),
+            cv2.putText(img, label, (x1, max(12, y1 - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2 if hot else 1)
         cv2.putText(img, f'MISSION {self.active}', (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        self.debug_pub.publish(self.bridge.cv2_to_imgmsg(img, encoding='bgr8'))
+        return img
 
 
 def main(args=None):
@@ -392,6 +511,8 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        if node.stream_writer is not None:
+            node.stream_writer.release()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

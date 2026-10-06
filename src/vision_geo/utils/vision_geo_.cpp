@@ -56,6 +56,15 @@ VisionGeoNode::VisionGeoNode()
   show_window_ = declare_parameter<bool>("show_window", true);
   window_name_ = declare_parameter<std::string>("window_name", "vision_geo");
 
+  // GStreamer stream (same params as vision_hailo)
+  enable_stream_       = declare_parameter<bool>("enable_stream", false);
+  stream_host_         = declare_parameter<std::string>("stream_host", "192.168.0.127");
+  stream_port_         = declare_parameter<int>("stream_port", 5000);
+  stream_width_        = declare_parameter<int>("stream_width", 640);
+  stream_height_       = declare_parameter<int>("stream_height", 480);
+  stream_fps_          = declare_parameter<int>("stream_fps", 30);
+  stream_bitrate_kbps_ = declare_parameter<int>("stream_bitrate_kbps", 500);
+
   // mission order (read by main() in src/vision_geo.cpp) + per-class topics
   declare_parameter<std::string>("order_topic", "/mission/order");
   declare_parameter<bool>("wait_for_order", true);
@@ -130,9 +139,9 @@ VisionGeoNode::VisionGeoNode()
       [this](const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
         gpsCallback(msg);
       });
-    rel_alt_sub_ = create_subscription<std_msgs::msg::Float32>(
+    rel_alt_sub_ = create_subscription<std_msgs::msg::Float64>(
       rel_alt_topic_, rclcpp::SensorDataQoS(),
-      [this](const std_msgs::msg::Float32::SharedPtr msg) {
+      [this](const std_msgs::msg::Float64::SharedPtr msg) {
         relAltCallback(msg);
       });
     RCLCPP_INFO(get_logger(), "Subscribing MAVROS: %s | %s | %s",
@@ -196,6 +205,9 @@ VisionGeoNode::VisionGeoNode()
 
 VisionGeoNode::~VisionGeoNode()
 {
+  if (stream_writer_.isOpened()) {
+    stream_writer_.release();
+  }
   if (show_window_) {
     cv::destroyWindow(window_name_);
   }
@@ -354,7 +366,7 @@ void VisionGeoNode::poseCallback(const geometry_msgs::msg::PoseStamped::SharedPt
   mavros_state_.pose_z_valid = true;
 }
 
-void VisionGeoNode::relAltCallback(const std_msgs::msg::Float32::SharedPtr msg)
+void VisionGeoNode::relAltCallback(const std_msgs::msg::Float64::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   mavros_state_.alt_agl = static_cast<double>(msg->data);
@@ -513,8 +525,12 @@ void VisionGeoNode::processFrame()
   // check pose freshness (only when using real MAVROS)
   if (!use_fixed_pose_) {
     if (!state.gps_valid || !state.pose_valid) {
+      std::string missing;
+      if (!state.gps_valid)  missing += " GPS on " + gps_topic_;
+      if (!state.pose_valid) missing += " pose on " + pose_topic_;
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "FPS=%.2f | Waiting for MAVROS GPS+pose...", fps_);
+        "FPS=%.2f | Waiting for MAVROS%s — check the topic names / MAVROS namespace",
+        fps_, missing.c_str());
     } else {
       const double age_ms =
         (now() - state.stamp).nanoseconds() / 1e6;
@@ -523,6 +539,13 @@ void VisionGeoNode::processFrame()
           "FPS=%.2f | MAVROS pose stale (%.0f ms)", fps_, age_ms);
       }
     }
+  }
+
+  // camera_info not received yet → no intrinsics, projection would throw
+  if (K_inv_.empty()) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+      "Waiting for camera intrinsics (camera_info on %s)...", camera_info_topic_.c_str());
+    return;
   }
 
   // inference
@@ -549,6 +572,7 @@ void VisionGeoNode::processFrame()
   updateMarkers(geo_dets, geo_dets_points, stamp);
   publishMarkers();
   publishBuoyMap(stamp);
+  streamFrame(frame, detections, geo_points);
   displayFrame(frame, detections, geo_points);
 
   if (!detections.empty()) {
@@ -1397,6 +1421,69 @@ void VisionGeoNode::displayFrame(
     show_window_ = false;
     RCLCPP_WARN(get_logger(), "Display failed, disabling window: %s", e.what());
   }
+}
+
+bool VisionGeoNode::ensureStreamWriter()
+{
+  if (!enable_stream_) {
+    return false;
+  }
+  if (stream_writer_initialized_) {
+    return stream_writer_.isOpened();
+  }
+
+  stream_writer_initialized_ = true;
+  std::ostringstream pipeline;
+  pipeline
+    << "appsrc is-live=true do-timestamp=true format=time ! "
+    << "video/x-raw,format=BGR,width=" << stream_width_
+    << ",height=" << stream_height_
+    << ",framerate=" << stream_fps_ << "/1 ! "
+    << "videoconvert ! "
+    << "x264enc tune=zerolatency bitrate=" << stream_bitrate_kbps_
+    << " speed-preset=superfast key-int-max=" << stream_fps_
+    << " byte-stream=true ! "
+    << "rtph264pay config-interval=1 pt=96 ! "
+    << "udpsink host=" << stream_host_
+    << " port=" << stream_port_
+    << " sync=false async=false";
+
+  if (!stream_writer_.open(
+      pipeline.str(), cv::CAP_GSTREAMER, 0,
+      static_cast<double>(stream_fps_),
+      cv::Size(stream_width_, stream_height_), true))
+  {
+    RCLCPP_ERROR(get_logger(),
+      "Failed to open GStreamer stream pipeline. Disabling stream. Pipeline: %s",
+      pipeline.str().c_str());
+    enable_stream_ = false;
+    return false;
+  }
+
+  RCLCPP_INFO(get_logger(), "Streaming enabled to udp://%s:%d (%dx%d @ %d fps)",
+    stream_host_.c_str(), stream_port_, stream_width_, stream_height_, stream_fps_);
+  return true;
+}
+
+void VisionGeoNode::streamFrame(
+  const cv::Mat & frame,
+  const std::vector<Detection> & dets,
+  const std::vector<GeoPoint> & geo)
+{
+  if (!ensureStreamWriter()) {
+    return;
+  }
+  // draw at the source size (boxes are in source pixels), then scale to the stream size
+  cv::Mat annotated = frame.clone();
+  drawCrosshair(annotated);
+  drawDetections(annotated, dets, geo);
+  cv::Mat out;
+  if (annotated.cols != stream_width_ || annotated.rows != stream_height_) {
+    cv::resize(annotated, out, cv::Size(stream_width_, stream_height_));
+  } else {
+    out = annotated;
+  }
+  stream_writer_.write(out);
 }
 
 // ── Mission command ────────────────────────────────────────────────────────────

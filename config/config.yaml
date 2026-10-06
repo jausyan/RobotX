@@ -26,15 +26,15 @@
       hold_time: 1.0
 
       # Task 1: survey point above the Safe Passage arena
-      survey_lat: -6.914744
-      survey_lon: 107.609810
+      survey_lat: -35.3632599
+      survey_lon: 149.1653198
       survey_alt: 20.0             
       survey_time: 600.0            
 
       # Task 2 & 3: delivery
       usv_alt: 20.0                
       approach_alt: 10.0           # first centering altitude above the circle
-      drop_alt: 3.0                # final centering + drop altitude
+      drop_alt: 10.0                # final centering + drop altitude
       task2_lat: -6.914800         # Task 2 platform (fly here, then center on the circle)
       task2_lon: 107.609900
       task3_lat: -6.914850         # Task 3 platform (the OTHER platform)
@@ -44,6 +44,7 @@
       order_topic: "/mission/order"                 # "UAV-GO" / "UAV-GO:<TIN>:<CIRCLE>" / "UAV-HOLD"
       usv_gps_topic: "/USV/global_position/global"
       command_timeout: 600.0                        # [s] waitCommand() gives up → RTL
+      run_start_timeout: 3600.0                     # [s] wait on the ground for CMD_RUN_START
 
     vision:
       target_topic_prefix: "/vision_geo/target/"   # + circle_<color> → centering_red() (closest one)

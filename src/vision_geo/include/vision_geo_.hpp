@@ -25,6 +25,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -115,7 +116,7 @@ private:
   void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg);
   void gpsCallback(const sensor_msgs::msg::NavSatFix::SharedPtr msg);
   void poseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
-  void relAltCallback(const std_msgs::msg::Float32::SharedPtr msg);
+  void relAltCallback(const std_msgs::msg::Float64::SharedPtr msg);
 
   // ── Core logic ──────────────────────────────────────────────────────────────
   void processFrame();
@@ -165,6 +166,13 @@ private:
     const std::vector<Detection> & dets,
     const std::vector<GeoPoint> & geo);
 
+  // ── GStreamer stream (same as vision_hailo: RTP/H.264 over UDP) ─────────────
+  bool ensureStreamWriter();
+  void streamFrame(
+    const cv::Mat & frame,
+    const std::vector<Detection> & dets,
+    const std::vector<GeoPoint> & geo);
+
   // ── Input source ─────────────────────────────────────────────────────────────
   void openInputSource();
   static bool startsWith(const std::string & value, const std::string & prefix);
@@ -203,6 +211,16 @@ private:
 
   bool show_window_;
   std::string window_name_;
+
+  bool enable_stream_;
+  std::string stream_host_;
+  int stream_port_;
+  int stream_width_;
+  int stream_height_;
+  int stream_fps_;
+  int stream_bitrate_kbps_;
+  cv::VideoWriter stream_writer_;
+  bool stream_writer_initialized_ = false;
 
   std::vector<double> object_size_m_;   // real object size per class, for solvePnP
   std::vector<bool> is_geo_class_;      // per class: GPS-projected + mapped (Task 1 buoys only)
@@ -257,7 +275,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr gps_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
-  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr rel_alt_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr rel_alt_sub_;  // MAVROS rel_alt is Float64
 
   // target_pubs_ indexed by class id; state_pubs_ keyed by buoy state
   std::vector<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr> target_pubs_;

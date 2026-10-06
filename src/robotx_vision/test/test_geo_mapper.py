@@ -2,7 +2,7 @@ import math
 
 from robotx_vision.geo import (body_to_ne, dist_m, offset_to_latlon,
                                parse_order, pixel_to_body, topic_suffix)
-from robotx_vision.light_mapper import LightMapper
+from robotx_vision.light_mapper import LightMapper, light_color
 
 
 class Log:
@@ -27,28 +27,71 @@ def test_projection_heading():
 
 
 def test_parse_order():
+    assert parse_order('UAV-GO:RED:GREEN') == ('red', 'green')     # our command format
+    assert parse_order('UAV-GO:BLUE:RED') == ('blue', 'red')
     assert parse_order('UAV-GO,tin:red,circle:blue') == ('red', 'blue')
-    assert parse_order('UAV-GO circle_green tin_blue') == ('blue', 'green')
     assert parse_order('UAV-GO') == (None, None)
 
 
+def test_light_color():
+    assert light_color('red_light') == 'red'
+    assert light_color('blue_light') == 'blue'
+    assert light_color('grey_light') == 'off'
+    assert light_color('blinking_light') == 'blue'
+    assert light_color('circle_red') == 'red'       # filtered out of Task 1 by the model
+    assert light_color('tin') is None
+
+
+# ---- buoy state: same cases as the vision_geo (C++) check ----------------------
 def _det(label, lat=-7.28, lon=112.79):
     return {'label': label, 'class_id': 0, 'conf': 0.9, 'u': 0, 'v': 0, 'lat': lat, 'lon': lon}
 
 
-def test_blink_confirmed_and_colour_lock():
+def _run(light):
+    """light(t) -> label or None (not detected); 10 s at 10 fps, one buoy."""
     m = LightMapper(Log())
-    t = 0.0
-    for lbl in ['grey_light', 'blue_light', 'grey_light', 'blue_light']:
-        m.update([_det(lbl)], t)
-        t += 1.0
-    assert m.snapshot().keys() == {'blinking_light'}
-    m.update([_det('red_light')], t)          # red must not hijack the blinking target
-    assert set(m.snapshot()) == {'blinking_light', 'red_light'}
+    for i in range(100):
+        t = i * 0.1
+        lbl = light(t)
+        m.update([_det(lbl)] if lbl else [], t)
+    assert len(m.targets) == 1
+    return m.targets[0]['state']
 
 
-def test_static_light_not_blinking():
+def _on(t):
+    return int(t) % 2 == 0          # 1 s on / 1 s off
+
+
+def test_flashing_red():
+    assert _run(lambda t: 'red_light' if _on(t) else 'grey_light') == 'red'
+
+
+def test_flashing_blue_is_entry():
+    assert _run(lambda t: 'blue_light' if _on(t) else 'grey_light') == 'entry'
+
+
+def test_flashing_blue_off_missed_is_entry():
+    assert _run(lambda t: 'blue_light' if _on(t) else None) == 'entry'
+
+
+def test_solid_blue_is_exit():
+    assert _run(lambda t: 'blue_light') == 'exit'
+
+
+def test_unlit_is_off():
+    assert _run(lambda t: 'grey_light') == 'off'
+
+
+def test_hazard_change_red_to_off():
+    # Disruptive: same buoy changes, no stale red copy is left
+    assert _run(lambda t: ('red_light' if _on(t) else 'grey_light') if t < 3 else 'grey_light') == 'off'
+
+
+def test_snapshot_groups_by_state():
     m = LightMapper(Log())
-    for i in range(20):
-        m.update([_det('grey_light')], i * 0.1)
-    assert set(m.snapshot()) == {'grey_light'}
+    for i in range(60):
+        t = i * 0.1
+        m.update([_det('red_light', lat=-7.28), _det('blue_light', lat=-7.2801)], t)
+    snap = m.snapshot()
+    assert set(snap) == {'red', 'green', 'entry', 'exit', 'off'}
+    assert len(snap['red']) == 1 and len(snap['exit']) == 1

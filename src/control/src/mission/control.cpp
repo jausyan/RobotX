@@ -22,6 +22,8 @@ double task3_lon;
 std::string order_topic;
 std::string usv_gps_topic;
 float command_timeout;
+float run_start_timeout;
+int confirmation;
 std::string target_topic_prefix;
 float speed_xy;
 float acc;
@@ -63,6 +65,7 @@ int main(int argc, char **argv) {
     node->declare_parameter<std::string>("communication.order_topic", "/mission/order");
     node->declare_parameter<std::string>("communication.usv_gps_topic", "/USV/global_position/global");
     node->declare_parameter<float>("communication.command_timeout", 600.0);
+    node->declare_parameter<float>("communication.run_start_timeout", 3600.0);
     node->declare_parameter<std::string>("vision.target_topic_prefix", "/vision_geo/target/");
     node->declare_parameter<float>("centering_red.speed_xy", 0.75);
     node->declare_parameter<float>("centering_red.acc", 0.05);
@@ -98,6 +101,7 @@ int main(int argc, char **argv) {
     node->get_parameter("communication.order_topic", order_topic);
     node->get_parameter("communication.usv_gps_topic", usv_gps_topic);
     node->get_parameter("communication.command_timeout", command_timeout);
+    node->get_parameter("communication.run_start_timeout", run_start_timeout);
     node->get_parameter("vision.target_topic_prefix", target_topic_prefix);
     node->get_parameter("centering_red.speed_xy", speed_xy);
     node->get_parameter("centering_red.acc", acc);
@@ -137,12 +141,31 @@ int main(int argc, char **argv) {
         rate.sleep();
     }
 
+    // ============================== PRE-RUN =====================================
+    // team rule: autonomous mode, then hold until the GCS sends CMD_RUN_START
+    setTask(node, TASK_NONE);
+    setMode(node, rate, "GUIDED");
+    RCLCPP_INFO(node->get_logger(), "PRE-RUN CONFIRMATION 1 / 0? (1 : WAIT FOR RUN START, 0 : ABORT)");
+    std::cin >> confirmation;
+    if (confirmation != 1) {
+        RCLCPP_WARN(node->get_logger(), "RUN CANCELLED..!!");
+        rclcpp::shutdown();
+        return 0;
+    }
+    RCLCPP_INFO(node->get_logger(), "PRE-RUN: ON THE GROUND, WAITING FOR RUN START...");
+    if (!waitCommand(node, "RUN-START", order_topic, run_start_timeout, false)) {
+        RCLCPP_ERROR(node->get_logger(), "=========== NO RUN START, ABORT (drone not armed) ===========");
+        rclcpp::shutdown();
+        return 1;
+    }
+
     RCLCPP_INFO(node->get_logger(), "TAKING OFF.... %.2f meters...", takeoff_altitude);
-    takeoff(node, rate, posee, takeoff_altitude);
+    takeoff(node, rate, posee, takeoff_altitude, false);
     holdPosition(node, rate, posee, hold_time);
 
     // ============================== TASK 1 ======================================
     TASK_1:
+    setTask(node, TASK_SAFE_PASSAGE);
     RCLCPP_INFO(node->get_logger(), "TASK 1: FLY TO SURVEY POINT");
     clearMission(node);
     pushMission(node, {create_waypoint(survey_lat, survey_lon, survey_alt)});
@@ -155,62 +178,90 @@ int main(int argc, char **argv) {
     RCLCPP_INFO(node->get_logger(), "TASK 1: SURVEY ALT REACHED, STARTING VISION...");
     pubCommand(node, "UAV-GO", order_topic);
     waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
+    setTask(node, TASK_NONE);
     RCLCPP_INFO(node->get_logger(), "TASK 1: MAPPING DONE, GOING TO USV POSE...");
-    goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
-
-    // ============================== TASK 2 ======================================
-    TASK_2:
-    RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
-    waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command);
-    order = parseCommand(command);
-    target = "circle_" + order.circle;
-    RCLCPP_INFO(node->get_logger(), "TASK 2: TIN %s → %s", order.tin.c_str(), target.c_str());
-    holdPosition(node, rate, posee, hold_time);
-
-    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    // goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
+    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, "/vision_geo/target/buoy_red");
     fix_alt(node, rate, posee, drop_alt);
-    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, "/vision_geo/target/buoy_red");
+    fix_alt(node, rate, posee, 3.0);
     if (centered) {
         channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
-        controlServoRepeated(node, channel, servo_buka, signal_repeat);
+        //controlServoRepeated(node, channel, servo_tutup, signal_repeat);
         holdPosition(node, rate, posee, hold_time);
     } else {
         RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
     }
-    fix_alt(node, rate, posee, approach_alt);
 
-    // ============================== TASK 3 ======================================
-    TASK_3:
-    RCLCPP_INFO(node->get_logger(), "TASK 3: WAITING FOR ORDER...");
-    if (!waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command)) {
-        RCLCPP_ERROR(node->get_logger(), "=========== TASK 3: NO ORDER, RTL ===========");
-        setMode(node, rate, "rtl");
-        rclcpp::shutdown();
-        return 1;
-    }
-    order = parseCommand(command);
-    target = "circle_" + order.circle;
-    RCLCPP_INFO(node->get_logger(), "TASK 3: TIN %s → %s", order.tin.c_str(), target.c_str());
+    // ============================== TASK 2 ======================================
+    // TASK_2:
+    // RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
+    // waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command);
+    // order = parseCommand(command);
+    // target = "tin_" + order.tin;
+    // RCLCPP_INFO(node->get_logger(), "TASK 2: TIN %s → %s", order.tin.c_str(), target.c_str());
+    // holdPosition(node, rate, posee, hold_time);
 
-    clearMission(node);
-    pushMission(node, {create_waypoint(task3_lat, task3_lon, approach_alt)});
-    setMode(node, rate, "AUTO");
-    waitForWP(node, rate, 1);
-    setMode(node, rate, "GUIDED");
-    holdPosition(node, rate, posee, 1.0);
-    holdPosition(node, rate, posee, hold_time);
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    // fix_alt(node, rate, posee, drop_alt);
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    // if (centered) {
+    //     channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
+    //     controlServoRepeated(node, channel, servo_tutup, signal_repeat);
+    //     holdPosition(node, rate, posee, hold_time);
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
+    // }
+    // fix_alt(node, rate, posee, takeoff_altitude);
 
-    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
-    fix_alt(node, rate, posee, drop_alt);
-    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
-    if (centered) {
-        channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
-        controlServoRepeated(node, channel, servo_buka, signal_repeat);
-        holdPosition(node, rate, posee, hold_time);
-    } else {
-        RCLCPP_ERROR(node->get_logger(), "TASK 3: CENTERING FAILED - SKIP DROP..!!");
-    }
-    fix_alt(node, rate, posee, approach_alt);
+    // target_circle = "circle_" + order.circle;
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target_circle);
+    // fix_alt(node, rate, posee, drop_alt);
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target_circle);
+    // if (centered) {
+    //     channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
+    //     controlServoRepeated(node, channel, servo_buka, signal_repeat);
+    //     holdPosition(node, rate, posee, hold_time);
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
+    // }
+
+    // goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
+
+    // // ============================== TASK 3 ======================================
+    // TASK_3:
+    // RCLCPP_INFO(node->get_logger(), "TASK 3: WAITING FOR ORDER...");
+    // waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command);
+    // order = parseCommand(command);
+    // target = "tin_" + order.tin;
+    // RCLCPP_INFO(node->get_logger(), "TASK 3: TIN %s → %s", order.tin.c_str(), target.c_str());
+    // holdPosition(node, rate, posee, hold_time);
+
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    // fix_alt(node, rate, posee, drop_alt);
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target);
+    // if (centered) {
+    //     channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
+    //     controlServoRepeated(node, channel, servo_tutup, signal_repeat);
+    //     holdPosition(node, rate, posee, hold_time);
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
+    // }
+    // fix_alt(node, rate, posee, takeoff_altitude);
+
+    // target_circle = "circle_" + order.circle;
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target_circle);
+    // fix_alt(node, rate, posee, drop_alt);
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, target_topic_prefix + target_circle);
+    // if (centered) {
+    //     channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
+    //     controlServoRepeated(node, channel, servo_buka, signal_repeat);
+    //     holdPosition(node, rate, posee, hold_time);
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
+    // }
+
+    setTask(node, TASK_NONE);
     RCLCPP_INFO(node->get_logger(), "ALL TASKS DONE, RTL...");
     setMode(node, rate, "rtl");
     RCLCPP_INFO(node->get_logger(), "=========== ALHAMDULILLAH MISSION COMPLETE ===========");

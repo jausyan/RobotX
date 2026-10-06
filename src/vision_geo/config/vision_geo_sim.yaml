@@ -35,6 +35,14 @@ vision_geo_node:
     map_merge_radius_m: 2.0       # GPS merge radius — small is safe since positions are averaged over frames
     show_window: true
     window_name: "vision_geo_sim"
+    # GStreamer stream (same as vision_hailo): RTP/H.264 over UDP
+    enable_stream: false
+    stream_host: "192.168.0.127"          # ground station IP
+    stream_port: 5000
+    stream_width: 640
+    stream_height: 480
+    stream_fps: 30
+    stream_bitrate_kbps: 500
     # mission order + per-class topics
     order_topic: "/mission/order"         # vision starts on the first "UAV-GO..." message
     wait_for_order: true                  # false = start detecting immediately (bench testing)

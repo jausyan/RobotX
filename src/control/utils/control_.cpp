@@ -264,7 +264,7 @@ float applyPrecisionStep(float command, float min_velocity, float max_velocity) 
 //     posee.pose.position.z = node->getCurrentLocalPose().pose.position.z;
 // }
 
-void takeoff(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float takeoff_alt) {
+void takeoff(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float takeoff_alt, bool confirm) {
     /**
      * ArduPilot takeoff: set GUIDED, confirm, arm, send the takeoff command and wait for the altitude.
      * parameters:
@@ -284,13 +284,16 @@ void takeoff(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, ge
     setMode(node, rate, "GUIDED");
 
     // confirm BEFORE arming — ArduPilot auto-disarms if it sits armed on the ground
-    RCLCPP_INFO(node->get_logger(), "=== TAKEOFF CONFIRMATION ===");
-    RCLCPP_INFO(node->get_logger(), "takeoff 1 if yes ?");
-    int confirmation;
-    std::cin >> confirmation;
-    if (confirmation != 1) {
-        RCLCPP_WARN(node->get_logger(), "Takeoff cancelled by user");
-        return;
+    // (confirm = false: the caller already confirmed, e.g. before waiting for RUN-START)
+    if (confirm) {
+        RCLCPP_INFO(node->get_logger(), "=== TAKEOFF CONFIRMATION ===");
+        RCLCPP_INFO(node->get_logger(), "takeoff 1 if yes ?");
+        int confirmation;
+        std::cin >> confirmation;
+        if (confirmation != 1) {
+            RCLCPP_WARN(node->get_logger(), "Takeoff cancelled by user");
+            return;
+        }
     }
 
     arm(node, rate);
@@ -2311,14 +2314,22 @@ void centering_red(
     RCLCPP_INFO(node->get_logger(), "RED centering finished. Status: %s", status ? "SUCCESS" : "FAILED");
 }
 
-void pubCommand(const std::shared_ptr<DroneController>&node, const std::string &command_text, const std::string &topic) {
+namespace {
+// one publisher per topic, created on first use and reused
+rclcpp::Publisher<std_msgs::msg::String>::SharedPtr commandPublisher(const std::shared_ptr<DroneController>&node, const std::string &topic) {
     static std::map<std::string, rclcpp::Publisher<std_msgs::msg::String>::SharedPtr> command_pubs;
-    if (command_pubs.find(topic) == command_pubs.end()) {
-        command_pubs[topic] = node->create_publisher<std_msgs::msg::String>(topic, 10);
+    auto it = command_pubs.find(topic);
+    if (it == command_pubs.end()) {
+        it = command_pubs.emplace(topic, node->create_publisher<std_msgs::msg::String>(topic, 10)).first;
     }
+    return it->second;
+}
+}
+
+void pubCommand(const std::shared_ptr<DroneController>&node, const std::string &command_text, const std::string &topic) {
     std_msgs::msg::String msg;
     msg.data = command_text;
-    command_pubs[topic]->publish(msg);
+    commandPublisher(node, topic)->publish(msg);
     RCLCPP_INFO(node->get_logger(), "Published: '%s' to topic %s", command_text.c_str(), topic.c_str());
 }
 
@@ -2331,14 +2342,24 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
         return text;
     };
 
+    const std::string exp_cmd = toUpperTrim(expected_command);
     std::string received_command;
     bool has_command = false;
+    // check EVERY message as it arrives, so a non-matching one can never hide a matching one
     auto sub = node->create_subscription<std_msgs::msg::String>(topic, 10,
         [&](const std_msgs::msg::String::SharedPtr msg) {
-            received_command = msg->data;
-            has_command = true;
+            if (has_command) return;
+            const std::string recv_cmd = toUpperTrim(msg->data);
+            if (recv_cmd.rfind(exp_cmd, 0) == 0) {   // "UAV-GO:RED:BLUE" matches "UAV-GO"
+                received_command = recv_cmd;
+                has_command = true;
+            } else if (recv_cmd.rfind("ACK:", 0) != 0) {
+                RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 5000,
+                    "Received unexpected command: %s (expected: %s)", recv_cmd.c_str(), exp_cmd.c_str());
+            }
         });
 
+    commandPublisher(node, topic);   // create the ACK publisher now, so discovery is done before an order arrives
     RCLCPP_INFO(node->get_logger(), "Waiting for '%s' on %s (timeout: %.0fs)...", expected_command.c_str(), topic.c_str(), timeout);
 
     geometry_msgs::msg::PoseStamped hold_pose = node->getCurrentLocalPose();
@@ -2347,7 +2368,6 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
             hold_pose.pose.position.x, hold_pose.pose.position.y, hold_pose.pose.position.z);
     }
 
-    const std::string exp_cmd = toUpperTrim(expected_command);
     const auto start_time = node->now();
     rclcpp::Rate loop_rate(10.0);
 
@@ -2358,14 +2378,11 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
         }
 
         if (has_command) {
-            const std::string recv_cmd = toUpperTrim(received_command);
-            if (recv_cmd.rfind(exp_cmd, 0) == 0) {   // "UAV-GO:RED:BLUE" matches "UAV-GO"
-                RCLCPP_INFO(node->get_logger(), "Received command: %s", recv_cmd.c_str());
-                if (received) *received = recv_cmd;
-                return true;
-            }
-            RCLCPP_WARN(node->get_logger(), "Received unexpected command: %s (expected: %s)", recv_cmd.c_str(), exp_cmd.c_str());
-            has_command = false;   
+            RCLCPP_INFO(node->get_logger(), "Received command: %s", received_command.c_str());
+            if (received) *received = received_command;
+            // confirm to uav_bridge (it re-sends the order until this ACK arrives)
+            pubCommand(node, "ACK:" + received_command, topic);
+            return true;
         }
 
         if ((node->now() - start_time).seconds() > timeout) {
@@ -2377,6 +2394,18 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
         loop_rate.sleep();
     }
     return false;
+}
+
+void setTask(const std::shared_ptr<DroneController>&node, uint8_t task, const std::string &topic) {
+    static rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr task_pub;
+    if (!task_pub) {
+        task_pub = node->create_publisher<std_msgs::msg::UInt8>(
+            topic, rclcpp::QoS(1).reliable().transient_local());
+    }
+    std_msgs::msg::UInt8 msg;
+    msg.data = task;
+    task_pub->publish(msg);
+    RCLCPP_INFO(node->get_logger(), "current_task -> %u", static_cast<unsigned>(task));
 }
 
 MissionOrder parseCommand(const std::string &command) {

@@ -1,0 +1,22 @@
+# UAV <-> GCS bridge. Write floats with a decimal point (1.0, not 1).
+uav_bridge:
+  ros__parameters:
+    topics:
+      order: /mission/order                    # internal: control + vision (== communication.order_topic)
+      current_task: /mission/current_task      # internal: control setTask()
+      usv_gps: /USV/global_position/global     # internal: goToVehicle() (== communication.usv_gps_topic)
+      buoy_map_prefix: /vision_geo/map/        # vision_geo / robotx_vision buoy_<state>
+      mavros_ns: /rian                         # MAVROS namespace (same as control)
+    system:                                    # team interface (rx_msgs), crosses the DDS Router
+      command: /system/mission/command
+      course: /system/mission/course
+      status: /system/mission/status
+      vehicle_prefix: /system/vehicle/uav
+      usv_heartbeat: /system/vehicle/usv/heartbeat
+    vehicle_id: uav
+    heartbeat_hz: 2.0                          # team rule: 2 Hz
+    resend_period_s: 1.0                       # re-send pending orders until control ACKs
+    go_repeat: 3                               # "UAV-GO" (vision start, no ACK) sent this many times
+    safe_passage_period_s: 1.0                 # SafePassage also re-sent this often
+    safe_passage_move_tol_m: 0.5               # republish at once when a buoy moves more than this
+    airborne_alt_m: 0.5                        # armed and above this = FLIGHT_PHASE_AIRBORNE

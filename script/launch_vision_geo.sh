@@ -10,6 +10,8 @@ RVIZ_CONFIG="$SCRIPT_DIR/vision_geo.rviz"
 
 source /opt/ros/humble/setup.bash
 source "$WORKSPACE/install/setup.bash"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-30}"     # team rule: every UAV node (MAVROS, Gazebo camera too) on domain 30
+echo "[launch_vision_geo.sh] ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 
 MODE="${1:-real}"
 
