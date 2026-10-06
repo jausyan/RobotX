@@ -39,6 +39,13 @@
   "37": "DroneController::getCurrentGPSState",
   "38": "DroneController::getCurrentLaserScan",
   "39": "DroneController::getCurrentEuler",
+  "40": "VisionNode",
   "41": "vision_video.cpp",
-  "42": "launch_mission.sh"
+  "42": "launch_mission.sh",
+  "43": "UavBridge",
+  "44": "launch_bridge.sh",
+  "45": "vision.launch.py",
+  "46": "__init__.py",
+  "47": "setup.py",
+  "48": "uav_bridge/setup.py"
 }

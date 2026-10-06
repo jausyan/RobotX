@@ -10,6 +10,8 @@ CONFIG="$WORKSPACE/config/config.yaml"
 
 source /opt/ros/humble/setup.bash
 source "$WORKSPACE/install/setup.bash"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-30}"     # team rule: every UAV node (MAVROS, Gazebo camera too) on domain 30
+echo "[launch_mission.sh] ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 
 echo "[launch_mission] Config: $CONFIG"
 ros2 run control control --ros-args --params-file "$CONFIG"

@@ -8,9 +8,12 @@ Two packages do the work:
 |---|---|
 | `vision_geo` | The drone's eyes. Runs YOLO on the downward camera, maps Task 1 buoys to GPS, and publishes one centering topic per object type. |
 | `control` | The drone's pilot. Runs the mission sequence (`src/control/src/mission/control.cpp`): take off, fly, wait for orders, center, drop. |
+| `uav_bridge` | The drone's radio. Translates the team communication (`rx_msgs`, `/system/...` topics, via the GCS) to/from our internal topics. |
+| `robotx_vision` | Python twin of `vision_geo` (same topics). Run **one** of the two. |
 
-The two programs never call each other directly — they only talk through ROS topics.
-Vehicles (UAV, USV, UUV) talk to each other through one shared topic: **`/mission/order`**.
+Inside the UAV, the programs talk through ROS topics; control and vision take their orders from **`/mission/order`**.
+Other vehicles never talk to us directly: everything goes through the **GCS** as `rx_msgs` on `/system/...` topics,
+and `uav_bridge` turns those into `/mission/order` strings (see [Team communication](#team-communication--uav_bridge)).
 
 ---
 
@@ -19,8 +22,12 @@ Vehicles (UAV, USV, UUV) talk to each other through one shared topic: **`/missio
 ```bash
 # build
 source /opt/ros/humble/setup.bash
-colcon build --packages-select vision_msgs vision_geo control
+colcon build                    # all packages, incl. rx_msgs (linked from the team repo) and uav_bridge
 source install/setup.bash
+export ROS_DOMAIN_ID=30         # team rule: every UAV node (MAVROS too) runs on domain 30
+
+# 0. start the bridge to the GCS
+./script/launch_bridge.sh
 
 # 1. start vision (on the ground — it stays idle until "UAV-GO")
 ./script/launch_vision_geo.sh          # real drone
@@ -39,13 +46,15 @@ source install/setup.bash
 
 ## `/mission/order` — command reference
 
-Type: `std_msgs/msg/String`. Everyone publishes and listens on this one topic.
+Type: `std_msgs/msg/String`. **Internal to the UAV** (domain 30) — it never leaves the drone.
 
 | Command | Sent by | Meaning |
 |---|---|---|
-| `UAV-GO` | UAV control (`pubCommand`) | "Drone is at survey altitude" → **starts vision_geo** (Task 1) |
-| `MISSION-DONE` | USV | Task 1 transit finished → UAV stops watching the buoys and goes to the USV |
-| `UAV-GO:<TIN>:<CIRCLE>` | UUV (Task 2) / USV (Task 3) | "Deliver the `<TIN>` tin onto the `<CIRCLE>` circle" |
+| `RUN-START` | uav_bridge ← GCS `CMD_RUN_START` | the run begins → control takes off (it waits on the ground before this) |
+| `UAV-GO` | control (`pubCommand`) at survey altitude, or uav_bridge ← GCS `CMD_GO` | **starts vision** (Task 1) |
+| `MISSION-DONE` | uav_bridge ← GCS `CMD_MISSION_DONE` | Task 1 transit finished → UAV stops watching the buoys and goes to the USV |
+| `UAV-GO:<TIN>:<CIRCLE>` | uav_bridge ← GCS `CMD_DELIVERY` (UUV request = Task 2, USV request = Task 3) | "Deliver the `<TIN>` tin onto the `<CIRCLE>` circle" |
+| `ACK:<command>` | control (`waitCommand`) | "I took this order" → uav_bridge stops re-sending it; robotx_vision starts the delivery on `ACK:UAV-GO:<TIN>:<CIRCLE>` |
 | `UAV-HOLD` | anyone | Ignored by the UAV (logged as unexpected) — it just keeps holding |
 
 Colors: `RED`, `GREEN`, `BLUE`.
@@ -56,7 +65,8 @@ Colors: `RED`, `GREEN`, `BLUE`.
 Rules:
 - Case does not matter (`uav-go:red:green` works).
 - A message matches when it **starts with** the expected command, so `UAV-GO:RED:GREEN` counts as `UAV-GO`.
-- The UAV only listens while it is waiting (`waitCommand()`); messages sent at other times are not seen.
+- control only listens while it is waiting (`waitCommand()`). Orders that arrive while it is busy are **not lost**:
+  uav_bridge re-sends each order every second until control answers `ACK:<command>` (Task 2 before Task 3).
 
 Examples:
 
@@ -77,12 +87,62 @@ ros2 topic echo /mission/order
 
 ---
 
+## Team communication — `uav_bridge`
+
+Team rules (`~/RobotX-SoS-communication-ITSN`): each vehicle runs on its own ROS domain (UAV = **30**), and only
+`/system/...` topics cross the DDS Router to the GCS and the other vehicles. The GCS is the only link to RoboCommand.
+
+```
+ GCS ── /system/mission/command (rx_msgs/Command) ──► uav_bridge ──► /mission/order ──► control / vision
+                                                         ▲   │
+ control ── "ACK:<command>" (waitCommand) ───────────────┘   │ re-sends every 1 s until ACK
+                                                             ▼
+ uav_bridge ──► /system/vehicle/uav/heartbeat (2 Hz) ──────────► GCS ──► RoboCommand
+            ──► /system/mission/status
+            ──► /system/vehicle/uav/task1/safe_passage ────────► USV (route planning) + GCS
+            ──► /system/vehicle/uav/task{2,3}/delivery (echo)
+ USV ── /system/vehicle/usv/heartbeat ──► uav_bridge ──► /USV/global_position/global ──► goToVehicle()
+```
+
+**GCS command → internal order**
+
+| `rx_msgs/Command` (target UAV or all) | `/mission/order` | Extra |
+|---|---|---|
+| `CMD_RUN_START` (`run_id`) | `RUN-START` | `run_id` goes into the status |
+| `CMD_GO` | `UAV-GO` | sent 3×, vision only (no ACK) |
+| `CMD_DELIVERY` (`task`, `resource_color`, `delivery_circle_color`) | `UAV-GO:<TIN>:<CIRCLE>` | echoes `ResourceDelivery` on `task2/` or `task3/delivery` at once |
+| `CMD_MISSION_DONE` | `MISSION-DONE` | |
+| `CMD_TASK4_*` | — | not supported yet (logged) |
+
+Colors: `COLOR_RED=1 → RED`, `COLOR_GREEN=2 → GREEN`, `COLOR_BLUE=3 → BLUE`. Repeated `command_seq` are ignored.
+
+**What the UAV reports**
+
+| Topic | Message | Content |
+|---|---|---|
+| `/system/vehicle/uav/heartbeat` | `Heartbeat`, 2 Hz | state (AUTO in GUIDED/AUTO/RTL/LAND, MANUAL otherwise), GPS, HAE altitude, speed, heading, roll, pitch, `current_task` (from control's `setTask()`), UAV, airborne/grounded |
+| `/system/mission/status` | `MissionStatus`, 1 Hz + on change | `run_id`, `vehicle_id = uav`, state, current task |
+| `/system/vehicle/uav/task1/safe_passage` | `SafePassage`, on change + 1 Hz | entry, exit, all buoys with `BeaconState` (from `/vision_geo/map/buoy_*`) |
+| `/system/vehicle/uav/task{2,3}/delivery` | `ResourceDelivery` | echo of the delivery request, sent when it arrives |
+
+Buoy state → `BeaconState`: `red → FLASHING_RED (2)`, `green → FLASHING_GREEN (3)`, `entry → FLASHING_BLUE (4)`,
+`exit → STEADY_BLUE (5)`, `off → OFF (1)`. Entry/exit not found yet = `0.0, 0.0` (agreed with the USV).
+
+**control's part**
+- Pre-run: GUIDED → operator confirms → **waits on the ground** for `RUN-START` → takes off (team rule: hold until `CMD_RUN_START`).
+- `setTask(node, TASK_…)` at the start of each task and `setTask(node, TASK_NONE)` at its end → `current_task` in the heartbeat.
+
+Config: `src/uav_bridge/config/uav_bridge.yaml` (MAVROS namespace `/rian`, topic names, rates).
+
+---
+
 ## All topics
 
 | Topic | Type | From → To | Content |
 |---|---|---|---|
-| `/mission/order` | `std_msgs/String` | all vehicles ↔ all vehicles | commands above |
-| `/USV/global_position/global` | `sensor_msgs/NavSatFix` | USV → UAV control | USV GPS, read **once** by `goToVehicle()` |
+| `/mission/order` | `std_msgs/String` | uav_bridge / control ↔ control / vision (UAV only) | commands above |
+| `/mission/current_task` | `std_msgs/UInt8` (latched) | control `setTask()` → uav_bridge | RxTask value for the heartbeat |
+| `/USV/global_position/global` | `sensor_msgs/NavSatFix` | uav_bridge (from the USV heartbeat) → control | USV GPS, read **once** by `goToVehicle()` |
 | `/vision_geo/map/buoy_red` | `vision_msgs/DetectedObjectArray` | vision_geo → USV | buoys currently **red** (pass on starboard) |
 | `/vision_geo/map/buoy_green` | same | vision_geo → USV | buoys currently **green** (pass on port) |
 | `/vision_geo/map/buoy_entry` | same | vision_geo → USV | **flashing blue** = ENTRY |
@@ -230,13 +290,14 @@ to a circle on the **other** platform.
 
 | Function | What it does |
 |---|---|
-| `takeoff()` | GUIDED → asks for confirmation → arm → takeoff command → wait for altitude |
+| `takeoff()` | GUIDED → asks for confirmation (skip with `confirm = false`) → arm → takeoff command → wait for altitude |
 | `setMode()` | switch flight mode (`GUIDED`, `AUTO`, `RTL`, `LAND`, `LOITER`) |
 | `clearMission()` + `pushMission()` + `setMode("AUTO")` + `waitForWP()` | fly to a GPS point with a one-waypoint mission |
 | `holdPosition()` | stay at the current position for N seconds |
 | `fix_alt()` | climb/descend to an altitude |
 | `pubCommand()` | publish a command on `/mission/order` |
-| `waitCommand()` | hold position until a command arrives (returns `false` on timeout) |
+| `waitCommand()` | hold position until a command arrives, then answer `ACK:<command>` (returns `false` on timeout) |
+| `setTask()` | report the task in progress (`TASK_SAFE_PASSAGE`, …, `TASK_NONE`) for the heartbeat |
 | `parseCommand()` | `"UAV-GO:RED:GREEN"` → `tin="red"`, `circle="green"` |
 | `goToVehicle()` | read the USV GPS once, fly above it, back to GUIDED |
 | `centering_red()` | follow a `PoseStamped` target topic until centered |
@@ -266,6 +327,7 @@ to a circle on the **other** platform.
 | `mission.task3_lat/lon` | Task 3 platform |
 | `communication.order_topic` | `/mission/order` |
 | `communication.command_timeout` | how long to wait for an order |
+| `communication.run_start_timeout` | how long to wait on the ground for `RUN-START` |
 | `centering_red.*` | centering speed, gains, tolerance |
 | `servo.channel_red/green/blue`, `servo_buka`, `signal_repeat` | dropper per tin color (**placeholders — not mapped yet**) |
 

@@ -19,7 +19,6 @@
 *.h265
 *.onnx
 *.openvino
-*.xml
 *.bin
 CLAUDE.md
 .graphifyignore

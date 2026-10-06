@@ -1,16 +1,16 @@
-# Graph Report - robotX  (2026-09-29)
+# Graph Report - robotX  (2026-10-05)
 
 ## Corpus Check
-- 29 files · ~38,516 words
+- 41 files · ~45,100 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 990 nodes · 1655 edges · 42 communities (31 shown, 11 thin omitted)
-- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 158 edges (avg confidence: 0.8)
+- 1147 nodes · 1938 edges · 49 communities (37 shown, 12 thin omitted)
+- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 163 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `fe4bef73`
+- Built from commit: `7b0d217f`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -54,19 +54,22 @@
 - DroneController::getCurrentGPSState
 - DroneController::getCurrentLaserScan
 - DroneController::getCurrentEuler
+- VisionNode
 - launch_mission.sh
+- UavBridge
+- launch_bridge.sh
 
 ## God Nodes (most connected - your core abstractions)
-1. `DroneController` - 223 edges
-2. `VisionGeoNode` - 118 edges
+1. `DroneController` - 225 edges
+2. `VisionGeoNode` - 130 edges
 3. `VisionArTagNode` - 84 edges
 4. `VisionVideoNode` - 76 edges
 5. `VisionTagNode` - 66 edges
 6. `VisionKRTINode` - 55 edges
 7. `ObjectDetectionCam` - 50 edges
-8. `centeringPayload()` - 21 edges
-9. `centeringPayload()` - 21 edges
-10. `main()` - 16 edges
+8. `VisionNode` - 32 edges
+9. `UavBridge` - 22 edges
+10. `centeringPayload()` - 21 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `centeringPayload()` --calls--> `point_rotation_by_quaternion()`  [INFERRED]
@@ -83,19 +86,19 @@
 ## Import Cycles
 - None detected.
 
-## Communities (42 total, 11 thin omitted)
+## Communities (49 total, 12 thin omitted)
 
 ### Community 0 - "DroneController"
 Cohesion: 0.01
 Nodes (162): DroneController, accel_cb, accel_sub, alt_cb, alt_sub, arm_, arming_client, artag_pose (+154 more)
 
 ### Community 1 - "utils/control_.cpp"
-Cohesion: 0.08
-Nodes (91): centeringPayload(), PoseStamped, Rate, shared_ptr, string, LocalMove(), hasReplied(), shared_ptr (+83 more)
+Cohesion: 0.07
+Nodes (94): centeringPayload(), PoseStamped, Rate, shared_ptr, string, LocalMove(), hasReplied(), shared_ptr (+86 more)
 
 ### Community 2 - "VisionGeoNode"
 Cohesion: 0.02
-Nodes (86): ActiveTrack, BuoyMapPoint, Mat, MavrosState, Net, Node, SharedPtr, size_t (+78 more)
+Nodes (96): ActiveTrack, BuoyMapPoint, Mat, MavrosState, Net, Node, SharedPtr, size_t (+88 more)
 
 ### Community 3 - "VisionArTagNode"
 Cohesion: 0.03
@@ -119,7 +122,7 @@ Nodes (26): PoseStamped, DroneController::getCurrentGatePose(), DroneController:
 
 ### Community 8 - "vision_geo_.cpp"
 Cohesion: 0.06
-Nodes (52): GeoPoint, addLightObservation, addObservationToBuoy, classColor, drawCrosshair, drawDetections, estimatePose, lightColor (+44 more)
+Nodes (54): GeoPoint, addLightObservation, addObservationToBuoy, classColor, drawCrosshair, drawDetections, ensureStreamWriter, estimatePose (+46 more)
 
 ### Community 9 - "ObjectDetectionCam"
 Cohesion: 0.06
@@ -174,8 +177,8 @@ Cohesion: 0.22
 Nodes (9): displayFrame, estimatePose, infer, publishLegacyPose, publishLostPose, publishPose, streamFrame, updateFps (+1 more)
 
 ### Community 23 - "VisionGeoNode::processFrame"
-Cohesion: 0.20
-Nodes (10): displayFrame, infer, projectPixelToGPS, publishBuoyMap, publishDetections, publishMarkers, publishTargets, updateFps (+2 more)
+Cohesion: 0.18
+Nodes (11): displayFrame, infer, projectPixelToGPS, publishBuoyMap, publishDetections, publishMarkers, publishTargets, streamFrame (+3 more)
 
 ### Community 25 - "VisionVideoNode::VisionVideoNode"
 Cohesion: 0.29
@@ -201,25 +204,33 @@ Nodes (4): processFrame, SharedPtr, VisionVideoNode::cameraInfoCallback(), Visio
 Cohesion: 0.67
 Nodes (3): Float64, DroneController::getCurrentCompassHdg(), DroneController::getCurrentRelAlt()
 
+### Community 40 - "VisionNode"
+Cohesion: 0.05
+Nodes (43): body_to_ne(), dist_m(), _find_color(), latlon_to_offset(), norm_label(), offset_to_latlon(), parse_order(), pixel_to_body() (+35 more)
+
+### Community 43 - "UavBridge"
+Cohesion: 0.06
+Nodes (23): test_buoy_field(), test_command_to_order(), test_field_changed(), test_roll_pitch(), test_state_phase(), test_target_and_ack(), main(), Node (+15 more)
+
 ## Knowledge Gaps
-- **429 isolated node(s):** `x`, `y`, `width`, `height`, `depth` (+424 more)
+- **440 isolated node(s):** `x`, `y`, `width`, `height`, `depth` (+435 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **11 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **12 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `DroneController` connect `DroneController` to `utils/control_.cpp`, `control_.hpp`, `fuseecam.cpp`, `Request`?**
-  _High betweenness centrality (0.471) - this node is a cross-community bridge._
+  _High betweenness centrality (0.401) - this node is a cross-community bridge._
 - **Why does `VisionGeoNode` connect `VisionGeoNode` to `vision_geo_.cpp`, `control_.hpp`, `VisionGeoNode::VisionGeoNode`, `VisionGeoNode::processFrame`?**
-  _High betweenness centrality (0.263) - this node is a cross-community bridge._
+  _High betweenness centrality (0.246) - this node is a cross-community bridge._
 - **Why does `VisionVideoNode` connect `VisionVideoNode` to `control_.hpp`, `vision_video_.cpp`, `VisionVideoNode::processFrame`, `VisionVideoNode::VisionVideoNode`, `string`, `VisionVideoNode::imageCallback`?**
-  _High betweenness centrality (0.195) - this node is a cross-community bridge._
+  _High betweenness centrality (0.147) - this node is a cross-community bridge._
 - **What connects `x`, `y`, `width` to the rest of the system?**
-  _429 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _440 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `DroneController` be split into smaller, more focused modules?**
   _Cohesion score 0.012345679012345678 - nodes in this community are weakly interconnected._
 - **Should `utils/control_.cpp` be split into smaller, more focused modules?**
-  _Cohesion score 0.07526881720430108 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07237972508591066 - nodes in this community are weakly interconnected._
 - **Should `VisionGeoNode` be split into smaller, more focused modules?**
-  _Cohesion score 0.023255813953488372 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.020833333333333332 - nodes in this community are weakly interconnected._
