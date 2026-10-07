@@ -19,6 +19,10 @@ VisionGeoNode::VisionGeoNode()
   input_height_    = declare_parameter<int>("input_height", 320);
   conf_threshold_  = declare_parameter<double>("conf_threshold", 0.4);
   nms_threshold_   = declare_parameter<double>("nms_threshold", 0.45);
+  // OpenVINO (same params as vision_video)
+  use_openvino_        = declare_parameter<bool>("use_openvino", false);
+  openvino_device_     = declare_parameter<std::string>("openvino_device", "CPU");
+  openvino_model_path_ = declare_parameter<std::string>("openvino_model_path", "");
   class_names_     = declare_parameter<std::vector<std::string>>("class_names",
     std::vector<std::string>{"object"});
 
@@ -107,15 +111,19 @@ VisionGeoNode::VisionGeoNode()
   // ── YOLO model ─────────────────────────────────────────────────────────────
   cv::setNumThreads(4);
   cv::setUseOptimized(true);
-  try {
-    net_ = cv::dnn::readNetFromONNX(model_path_);
-    net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-    RCLCPP_INFO(get_logger(), "ONNX model loaded: %s", model_path_.c_str());
-  } catch (const std::exception & e) {
-    RCLCPP_FATAL(get_logger(), "Failed to load ONNX model (%s): %s",
-      model_path_.c_str(), e.what());
-    throw;
+  if (use_openvino_) {
+    initializeOpenVINO();
+  } else {
+    try {
+      net_ = cv::dnn::readNetFromONNX(model_path_);
+      net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+      net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+      RCLCPP_INFO(get_logger(), "ONNX model loaded (OpenCV DNN): %s", model_path_.c_str());
+    } catch (const std::exception & e) {
+      RCLCPP_FATAL(get_logger(), "Failed to load ONNX model (%s): %s",
+        model_path_.c_str(), e.what());
+      throw;
+    }
   }
 
   // ── MAVROS subscriptions ───────────────────────────────────────────────────
@@ -205,6 +213,11 @@ VisionGeoNode::VisionGeoNode()
 
 VisionGeoNode::~VisionGeoNode()
 {
+#if defined(ENABLE_OPENVINO_RUNTIME)
+  if (openvino_infer_request_ != nullptr) ov_infer_request_free(openvino_infer_request_);
+  if (openvino_compiled_model_ != nullptr) ov_compiled_model_free(openvino_compiled_model_);
+  if (openvino_core_ != nullptr) ov_core_free(openvino_core_);
+#endif
   if (stream_writer_.isOpened()) {
     stream_writer_.release();
   }
@@ -587,6 +600,139 @@ void VisionGeoNode::processFrame()
 
 // ── Inference ──────────────────────────────────────────────────────────────────
 
+bool VisionGeoNode::forwardOpenCV(const cv::Mat & blob, cv::Mat & out)
+{
+  try {
+    net_.setInput(blob);
+    out = net_.forward();
+    return true;
+  } catch (const cv::Exception & primary) {
+    try {
+      std::vector<cv::Mat> outputs;
+      net_.forward(outputs, net_.getUnconnectedOutLayersNames());
+      if (outputs.empty()) return false;
+      out = outputs[0];
+      return true;
+    } catch (const cv::Exception & fallback) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
+        "DNN forward failed: %s | %s", primary.what(), fallback.what());
+      return false;
+    }
+  }
+}
+
+// ── OpenVINO (same as vision_video: C API, so no C++ ABI clash with the pip build) ──
+
+void VisionGeoNode::initializeOpenVINO()
+{
+#if defined(ENABLE_OPENVINO_RUNTIME)
+  const std::string ov_model_path = openvino_model_path_.empty() ? model_path_ : openvino_model_path_;
+  ov_status_e status = ov_core_create(&openvino_core_);
+  if (status != OK || openvino_core_ == nullptr) {
+    throw std::runtime_error("ov_core_create failed: " + getOpenVINOError(status));
+  }
+  status = ov_core_compile_model_from_file(
+    openvino_core_, ov_model_path.c_str(), openvino_device_.c_str(), 0, &openvino_compiled_model_);
+  if (status != OK || openvino_compiled_model_ == nullptr) {
+    throw std::runtime_error("ov_core_compile_model_from_file(" + ov_model_path + ") failed: " +
+      getOpenVINOError(status));
+  }
+  status = ov_compiled_model_create_infer_request(openvino_compiled_model_, &openvino_infer_request_);
+  if (status != OK || openvino_infer_request_ == nullptr) {
+    throw std::runtime_error("ov_compiled_model_create_infer_request failed: " + getOpenVINOError(status));
+  }
+  RCLCPP_INFO(get_logger(), "Model loaded (OpenVINO): %s on %s",
+    ov_model_path.c_str(), openvino_device_.c_str());
+#else
+  throw std::runtime_error(
+    "use_openvino=true but vision_geo was built without OpenVINO "
+    "(OpenVINO not found at build time, or -DENABLE_OPENVINO=OFF)");
+#endif
+}
+
+#if defined(ENABLE_OPENVINO_RUNTIME)
+std::string VisionGeoNode::getOpenVINOError(ov_status_e status) const
+{
+  std::ostringstream oss;
+  oss << ov_get_error_info(status);
+  const char * detail = ov_get_last_err_msg();
+  if (detail != nullptr && detail[0] != '\0') oss << " | " << detail;
+  return oss.str();
+}
+#endif
+
+bool VisionGeoNode::forwardOpenVINO(const cv::Mat & blob, cv::Mat & out)
+{
+#if defined(ENABLE_OPENVINO_RUNTIME)
+  ov_tensor_t * input_tensor = nullptr;
+  ov_tensor_t * output_tensor = nullptr;
+  ov_shape_t output_shape{};
+  bool has_output_shape = false;
+  auto fail = [&](const char * what, ov_status_e status) {
+    RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
+      "OpenVINO %s failed: %s", what, getOpenVINOError(status).c_str());
+    if (has_output_shape) ov_shape_free(&output_shape);
+    if (output_tensor != nullptr) ov_tensor_free(output_tensor);
+    if (input_tensor != nullptr) ov_tensor_free(input_tensor);
+    return false;
+  };
+
+  ov_status_e status = ov_infer_request_get_input_tensor(openvino_infer_request_, &input_tensor);
+  if (status != OK || input_tensor == nullptr) return fail("input tensor fetch", status);
+
+  size_t input_count = 0;
+  status = ov_tensor_get_size(input_tensor, &input_count);
+  if (status != OK) return fail("input tensor size", status);
+  if (blob.total() != input_count) {
+    RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
+      "OpenVINO input size mismatch: blob=%zu tensor=%zu (check input_width/input_height = model size)",
+      blob.total(), input_count);
+    ov_tensor_free(input_tensor);
+    return false;
+  }
+
+  void * input_ptr = nullptr;
+  status = ov_tensor_data(input_tensor, &input_ptr);
+  if (status != OK || input_ptr == nullptr) return fail("input tensor data", status);
+  std::memcpy(input_ptr, blob.ptr<float>(), blob.total() * sizeof(float));
+
+  status = ov_infer_request_infer(openvino_infer_request_);
+  if (status != OK) return fail("infer", status);
+
+  status = ov_infer_request_get_output_tensor(openvino_infer_request_, &output_tensor);
+  if (status != OK || output_tensor == nullptr) return fail("output tensor fetch", status);
+  status = ov_tensor_get_shape(output_tensor, &output_shape);
+  if (status != OK) return fail("output shape", status);
+  has_output_shape = true;
+
+  void * output_ptr = nullptr;
+  status = ov_tensor_data(output_tensor, &output_ptr);
+  if (status != OK || output_ptr == nullptr) return fail("output tensor data", status);
+
+  // [1, C, N] (or [1, 1, C, N]) -> 3-D Mat, same layout as OpenCV DNN's output
+  const int64_t rank = output_shape.rank;
+  const int off = (rank == 4 && output_shape.dims[0] == 1) ? 1 : 0;
+  const bool ok = (rank == 3) || (rank == 4 && off == 1);
+  if (ok) {
+    int dims[3] = {
+      static_cast<int>(output_shape.dims[off]),
+      static_cast<int>(output_shape.dims[off + 1]),
+      static_cast<int>(output_shape.dims[off + 2])};
+    out = cv::Mat(3, dims, CV_32F, output_ptr).clone();
+  } else {
+    RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
+      "Unsupported OpenVINO output shape rank=%ld", static_cast<long>(rank));
+  }
+  ov_shape_free(&output_shape);
+  ov_tensor_free(output_tensor);
+  ov_tensor_free(input_tensor);
+  return ok;
+#else
+  (void)blob; (void)out;
+  return false;
+#endif
+}
+
 std::vector<VisionGeoNode::Detection> VisionGeoNode::infer(const cv::Mat & frame)
 {
   std::vector<Detection> detections;
@@ -597,23 +743,8 @@ std::vector<VisionGeoNode::Detection> VisionGeoNode::infer(const cv::Mat & frame
     cv::Scalar(), true, false);
 
   cv::Mat out;
-  try {
-    net_.setInput(blob);
-    out = net_.forward();
-  } catch (const cv::Exception & primary) {
-    try {
-      std::vector<cv::Mat> outputs;
-      net_.forward(outputs, net_.getUnconnectedOutLayersNames());
-      if (outputs.empty()) return detections;
-      out = outputs[0];
-    } catch (const cv::Exception & fallback) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
-        "DNN forward failed: %s | %s", primary.what(), fallback.what());
-      return detections;
-    }
-  }
-
-  if (out.dims != 3) return detections;
+  const bool ok = use_openvino_ ? forwardOpenVINO(blob, out) : forwardOpenCV(blob, out);
+  if (!ok || out.dims != 3) return detections;
 
   const int dim1 = out.size[1];
   const int dim2 = out.size[2];

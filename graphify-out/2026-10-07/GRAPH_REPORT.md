@@ -1,16 +1,16 @@
-# Graph Report - robotX  (2026-10-07)
+# Graph Report - robotX  (2026-10-05)
 
 ## Corpus Check
-- 43 files · ~46,633 words
+- 41 files · ~45,100 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1168 nodes · 1963 edges · 51 communities (37 shown, 14 thin omitted)
-- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 166 edges (avg confidence: 0.8)
+- 1147 nodes · 1938 edges · 49 communities (37 shown, 12 thin omitted)
+- Extraction: 92% EXTRACTED · 8% INFERRED · 0% AMBIGUOUS · INFERRED: 163 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e6396ab8`
+- Built from commit: `7b0d217f`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -58,12 +58,10 @@
 - launch_mission.sh
 - UavBridge
 - launch_bridge.sh
-- diagnose_uav.sh
-- check_system_topics.sh
 
 ## God Nodes (most connected - your core abstractions)
 1. `DroneController` - 225 edges
-2. `VisionGeoNode` - 136 edges
+2. `VisionGeoNode` - 130 edges
 3. `VisionArTagNode` - 84 edges
 4. `VisionVideoNode` - 76 edges
 5. `VisionTagNode` - 66 edges
@@ -88,7 +86,7 @@
 ## Import Cycles
 - None detected.
 
-## Communities (51 total, 14 thin omitted)
+## Communities (49 total, 12 thin omitted)
 
 ### Community 0 - "DroneController"
 Cohesion: 0.01
@@ -100,7 +98,7 @@ Nodes (94): centeringPayload(), PoseStamped, Rate, shared_ptr, string, LocalMove
 
 ### Community 2 - "VisionGeoNode"
 Cohesion: 0.02
-Nodes (99): ActiveTrack, BuoyMapPoint, Mat, MavrosState, Net, Node, SharedPtr, size_t (+91 more)
+Nodes (96): ActiveTrack, BuoyMapPoint, Mat, MavrosState, Net, Node, SharedPtr, size_t (+88 more)
 
 ### Community 3 - "VisionArTagNode"
 Cohesion: 0.03
@@ -123,8 +121,8 @@ Cohesion: 0.07
 Nodes (26): PoseStamped, DroneController::getCurrentGatePose(), DroneController::getCurrentLocalPose(), DroneController::getCurrentPoseArTag(), DroneController::getCurrentPoseBunder(), DroneController::getCurrentPoseEmber(), DroneController::getCurrentPosePayload(), DroneController::getDroneNonZeroPoseArTag() (+18 more)
 
 ### Community 8 - "vision_geo_.cpp"
-Cohesion: 0.05
-Nodes (60): GeoPoint, addLightObservation, addObservationToBuoy, classColor, drawCrosshair, drawDetections, ensureStreamWriter, estimatePose (+52 more)
+Cohesion: 0.06
+Nodes (54): GeoPoint, addLightObservation, addObservationToBuoy, classColor, drawCrosshair, drawDetections, ensureStreamWriter, estimatePose (+46 more)
 
 ### Community 9 - "ObjectDetectionCam"
 Cohesion: 0.06
@@ -139,8 +137,8 @@ Cohesion: 0.13
 Nodes (24): LatLonAlt, alt, lat, lon, XYZ, x, y, z (+16 more)
 
 ### Community 12 - "SharedPtr"
-Cohesion: 0.14
-Nodes (14): SharedPtr, DroneController::accel_cb(), DroneController::alt_cb(), DroneController::artag_pose_cb(), DroneController::bunder_pose_cb(), DroneController::compass_hdg_cb(), DroneController::ember_pose_cb(), DroneController::gate_pose_cb() (+6 more)
+Cohesion: 0.07
+Nodes (23): NavSatFix, Range, SharedPtr, State, TwistStamped, DroneController::accel_cb(), DroneController::alt_cb(), DroneController::artag_pose_cb() (+15 more)
 
 ### Community 13 - "Request"
 Cohesion: 0.19
@@ -171,8 +169,8 @@ Cohesion: 0.18
 Nodes (10): detectNet, objDimentions, depth, height, width, offset, x, y (+2 more)
 
 ### Community 20 - "VisionGeoNode::VisionGeoNode"
-Cohesion: 0.20
-Nodes (10): cameraInfoCallback, gpsCallback, imageCallback, initializeOpenVINO, openInputSource, poseCallback, relAltCallback, setupCameraIntrinsics (+2 more)
+Cohesion: 0.22
+Nodes (9): cameraInfoCallback, gpsCallback, imageCallback, openInputSource, poseCallback, relAltCallback, setupCameraIntrinsics, setupCamToBodyRotation (+1 more)
 
 ### Community 22 - "VisionVideoNode::processFrame"
 Cohesion: 0.22
@@ -188,15 +186,15 @@ Nodes (7): cameraInfoCallback, imageCallback, initializeOpenVINO, openInputSourc
 
 ### Community 26 - "string"
 Cohesion: 0.33
-Nodes (6): startsWith, ov_status_e, string, VisionVideoNode::getOpenVINOError(), VisionVideoNode::openInputSource(), VisionVideoNode::startsWith()
+Nodes (6): ov_status_e, startsWith, string, VisionVideoNode::getOpenVINOError(), VisionVideoNode::openInputSource(), VisionVideoNode::startsWith()
 
 ### Community 27 - ".detection"
 Cohesion: 0.47
 Nodes (4): convertCUDAtoBGR(), Mat, PoseStamped, uchar3
 
 ### Community 29 - "ConstSharedPtr"
-Cohesion: 0.10
-Nodes (13): ConstSharedPtr, NavSatFix, Range, State, TwistStamped, DroneController::getCurrentGPSPosition(), DroneController::getCurrentRangefinder(), DroneController::getCurrentState() (+5 more)
+Cohesion: 0.50
+Nodes (4): ConstSharedPtr, DroneController::pose_cb(), DroneController::state_cb(), DroneController::vel_cb()
 
 ### Community 31 - "VisionVideoNode::imageCallback"
 Cohesion: 0.50
@@ -215,24 +213,24 @@ Cohesion: 0.06
 Nodes (23): test_buoy_field(), test_command_to_order(), test_field_changed(), test_roll_pitch(), test_state_phase(), test_target_and_ack(), main(), Node (+15 more)
 
 ## Knowledge Gaps
-- **448 isolated node(s):** `x`, `y`, `width`, `height`, `depth` (+443 more)
+- **440 isolated node(s):** `x`, `y`, `width`, `height`, `depth` (+435 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **14 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **12 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `DroneController` connect `DroneController` to `utils/control_.cpp`, `control_.hpp`, `fuseecam.cpp`, `Request`?**
-  _High betweenness centrality (0.393) - this node is a cross-community bridge._
+  _High betweenness centrality (0.401) - this node is a cross-community bridge._
 - **Why does `VisionGeoNode` connect `VisionGeoNode` to `vision_geo_.cpp`, `control_.hpp`, `VisionGeoNode::VisionGeoNode`, `VisionGeoNode::processFrame`?**
-  _High betweenness centrality (0.258) - this node is a cross-community bridge._
+  _High betweenness centrality (0.246) - this node is a cross-community bridge._
 - **Why does `VisionVideoNode` connect `VisionVideoNode` to `control_.hpp`, `vision_video_.cpp`, `VisionVideoNode::processFrame`, `VisionVideoNode::VisionVideoNode`, `string`, `VisionVideoNode::imageCallback`?**
-  _High betweenness centrality (0.151) - this node is a cross-community bridge._
+  _High betweenness centrality (0.147) - this node is a cross-community bridge._
 - **What connects `x`, `y`, `width` to the rest of the system?**
-  _448 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _440 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `DroneController` be split into smaller, more focused modules?**
   _Cohesion score 0.012345679012345678 - nodes in this community are weakly interconnected._
 - **Should `utils/control_.cpp` be split into smaller, more focused modules?**
   _Cohesion score 0.07237972508591066 - nodes in this community are weakly interconnected._
 - **Should `VisionGeoNode` be split into smaller, more focused modules?**
-  _Cohesion score 0.020202020202020204 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.020833333333333332 - nodes in this community are weakly interconnected._

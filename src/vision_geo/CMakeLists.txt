@@ -49,9 +49,30 @@ target_link_libraries(vision_geo
   /home/el-system/.local/opencv-4.10/lib/libopencv_imgcodecs.so
 )
 
+# ── OpenVINO (same as vision_video: C API from the pip package) ──────────────
+# ON by default; if OpenVINO is not found it builds without it (use_openvino must stay false).
+option(ENABLE_OPENVINO "Enable OpenVINO runtime linkage" ON)
+set(OPENVINO_PIP_DIR "$ENV{HOME}/.local/lib/python3.10/site-packages/openvino")
+set(VISION_GEO_RPATH "/home/el-system/.local/opencv-4.10/lib")
+if(ENABLE_OPENVINO)
+  find_package(OpenVINO QUIET COMPONENTS Runtime PATHS "${OPENVINO_PIP_DIR}/cmake")
+  if(OpenVINO_FOUND)
+    target_link_libraries(vision_geo openvino::runtime::c)
+    target_compile_definitions(vision_geo PRIVATE ENABLE_OPENVINO_RUNTIME=1)
+    # the pip OpenVINO target forces the old C++ ABI (_GLIBCXX_USE_CXX11_ABI=0), which breaks
+    # linking with ROS / OpenCV; we only use the C API, so keep the new ABI (same as vision_video)
+    target_compile_options(vision_geo PRIVATE -U_GLIBCXX_USE_CXX11_ABI -D_GLIBCXX_USE_CXX11_ABI=1)
+    # runtime must find libopenvino_c.so (and its plugins) in the pip package
+    list(APPEND VISION_GEO_RPATH "${OPENVINO_PIP_DIR}/libs")
+    message(STATUS "vision_geo: OpenVINO ${OpenVINO_VERSION} enabled")
+  else()
+    message(WARNING "vision_geo: OpenVINO not found in ${OPENVINO_PIP_DIR} - building without it")
+  endif()
+endif()
+
 set_target_properties(vision_geo PROPERTIES
   BUILD_WITH_INSTALL_RPATH TRUE
-  INSTALL_RPATH "/home/el-system/.local/opencv-4.10/lib"
+  INSTALL_RPATH "${VISION_GEO_RPATH}"
 )
 
 install(TARGETS vision_geo DESTINATION lib/${PROJECT_NAME})
