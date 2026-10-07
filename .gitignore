@@ -1,3 +1,4 @@
+/graphify-out
 /build
 /log
 /install
@@ -22,3 +23,13 @@
 *.bin
 CLAUDE.md
 .graphifyignore
+
+# Python environment + caches (never commit: torch alone is > 400 MB)
+/.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# trained weights (like *.onnx above)
+*.pt
