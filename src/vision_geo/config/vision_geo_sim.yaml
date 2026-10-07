@@ -12,6 +12,10 @@ vision_geo_node:
     input_height: 320
     conf_threshold: 0.4
     nms_threshold: 0.45
+    # OpenVINO (same as vision_video). false = OpenCV DNN
+    use_openvino: true
+    openvino_device: "CPU"
+    openvino_model_path: ""        # empty = model_path (.onnx); or an OpenVINO IR .xml
     # one entry per YOLO class id — ORDER MUST MATCH THE MODEL'S CLASS ORDER
     class_names:   ["buoy_red", "buoy_green", "buoy_blue", "buoy_off", "circle_red", "circle_green", "circle_blue"]
     object_size_m: [0.4,        0.4,          0.4,         0.4,        0.65,         0.65,           0.65]  # real size per class (solvePnP)

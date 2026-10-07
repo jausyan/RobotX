@@ -32,6 +32,10 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
+#if defined(ENABLE_OPENVINO_RUNTIME)
+#include <openvino/c/openvino.h>
+#endif
+
 #include "vision_msgs/msg/detected_object.hpp"
 #include "vision_msgs/msg/detected_object_array.hpp"
 
@@ -121,6 +125,14 @@ private:
   // ── Core logic ──────────────────────────────────────────────────────────────
   void processFrame();
   std::vector<Detection> infer(const cv::Mat & frame);
+  bool forwardOpenCV(const cv::Mat & blob, cv::Mat & out);
+
+  // ── OpenVINO (same as vision_video: C API) ─────────────────────────────────
+  void initializeOpenVINO();
+  bool forwardOpenVINO(const cv::Mat & blob, cv::Mat & out);
+#if defined(ENABLE_OPENVINO_RUNTIME)
+  std::string getOpenVINOError(ov_status_e status) const;
+#endif
   GeoPoint projectPixelToGPS(float u, float v, const MavrosState & state) const;
 
   // ── Math helpers ─────────────────────────────────────────────────────────────
@@ -240,6 +252,14 @@ private:
 
   // ── Inference ────────────────────────────────────────────────────────────────
   cv::dnn::Net net_;
+  bool use_openvino_ = false;
+  std::string openvino_device_;
+  std::string openvino_model_path_;   // empty = model_path_ (.onnx); or an OpenVINO IR .xml
+#if defined(ENABLE_OPENVINO_RUNTIME)
+  ov_core_t * openvino_core_ = nullptr;
+  ov_compiled_model_t * openvino_compiled_model_ = nullptr;
+  ov_infer_request_t * openvino_infer_request_ = nullptr;
+#endif
   cv::VideoCapture capture_;
   bool using_camera_device_ = false;
 
