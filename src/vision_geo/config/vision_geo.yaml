@@ -1,7 +1,7 @@
 vision_geo_node:
   ros__parameters:
-    input_mode: "topic"          # "device" | "topic"
-    input_source: "/iris_with_camera_2/camera/image_raw"
+    input_mode: "device"          # "device" | "topic"
+    input_source: "/dev/video0"
     use_camera_info: true
     camera_info_topic: "/iris_with_camera_2/camera/camera_info"
     camera_matrix: [504.99132615, 0.0, 318.4012728,
@@ -9,7 +9,7 @@ vision_geo_node:
                     0.0, 0.0, 1.0]
     distortion_coeffs: [0.07771398, -0.18711237, -0.00182709, 0.00026326, -0.06212367]
     cam_to_body_rpy: [180.0, 0.0, 0.0]
-    model_path: "/home/el-system/robotX/models/buoys_1.onnx"
+    model_path: "/home/robotx/RobotX/models/buoys_1.onnx"
     input_width: 320
     input_height: 320
     conf_threshold: 0.4
@@ -37,11 +37,11 @@ vision_geo_node:
     track_exit_frames: 5          
     min_obs_to_commit: 5          
     map_merge_radius_m: 2.0       
-    show_window: true
+    show_window: false
     window_name: "vision_geo"
     # GStreamer stream (same as vision_hailo): RTP/H.264 over UDP
-    enable_stream: false
-    stream_host: "192.168.0.127"          # ground station IP
+    enable_stream: true
+    stream_host: "100.95.74.67"          # ground station IP
     stream_port: 5000
     stream_width: 640
     stream_height: 480

@@ -1604,6 +1604,13 @@ void VisionGeoNode::streamFrame(
   if (!ensureStreamWriter()) {
     return;
   }
+  // send at most stream_fps frames per second: inference may run much faster than the
+  // radio link needs (e.g. 260 FPS on the NPU), the stream is only for monitoring
+  const auto t = std::chrono::steady_clock::now();
+  if (t - last_stream_write_ < std::chrono::duration<double>(1.0 / std::max(1, stream_fps_))) {
+    return;
+  }
+  last_stream_write_ = t;
   // draw at the source size (boxes are in source pixels), then scale to the stream size
   cv::Mat annotated = frame.clone();
   drawCrosshair(annotated);

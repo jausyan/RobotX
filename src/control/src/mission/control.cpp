@@ -168,30 +168,31 @@ int main(int argc, char **argv) {
     setTask(node, TASK_SAFE_PASSAGE);
     RCLCPP_INFO(node->get_logger(), "TASK 1: FLY TO SURVEY POINT");
     clearMission(node);
-    pushMission(node, {create_waypoint(survey_lat, survey_lon, survey_alt)});
+    pushMission(node, {create_waypoint(survey_lat, survey_lon, takeoff_altitude)});
     setMode(node, rate, "AUTO");
     waitForWP(node, rate, 1);
     setMode(node, rate, "GUIDED");
-    holdPosition(node, rate, posee, 1.0);
+    holdPosition(node, rate, posee, 10.0);
     fix_alt(node, rate, posee, survey_alt, 0.3, 60.0);
-    holdPosition(node, rate, posee, 3.0);
-    RCLCPP_INFO(node->get_logger(), "TASK 1: SURVEY ALT REACHED, STARTING VISION...");
-    pubCommand(node, "UAV-GO", order_topic);
-    waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
-    setTask(node, TASK_NONE);
-    RCLCPP_INFO(node->get_logger(), "TASK 1: MAPPING DONE, GOING TO USV POSE...");
-    // goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
-    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, "/vision_geo/target/buoy_red");
-    fix_alt(node, rate, posee, drop_alt);
-    centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, "/vision_geo/target/buoy_red");
-    fix_alt(node, rate, posee, 3.0);
-    if (centered) {
-        channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
-        //controlServoRepeated(node, channel, servo_tutup, signal_repeat);
-        holdPosition(node, rate, posee, hold_time);
-    } else {
-        RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
-    }
+    holdPosition(node, rate, posee, 5.0);
+    // holdPosition(node, rate, posee, 3.0);
+    // RCLCPP_INFO(node->get_logger(), "TASK 1: SURVEY ALT REACHED, STARTING VISION...");
+    // pubCommand(node, "UAV-GO", order_topic);
+    // waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
+    // setTask(node, TASK_NONE);
+    // RCLCPP_INFO(node->get_logger(), "TASK 1: MAPPING DONE, GOING TO USV POSE...");
+    // // goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, "/vision_geo/target/buoy_red");
+    // fix_alt(node, rate, posee, drop_alt);
+    // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_red, "/vision_geo/target/buoy_red");
+    // fix_alt(node, rate, posee, 3.0);
+    // if (centered) {
+    //     channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
+    //     //controlServoRepeated(node, channel, servo_tutup, signal_repeat);
+    //     holdPosition(node, rate, posee, hold_time);
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
+    // }
 
     // ============================== TASK 2 ======================================
     // TASK_2:
@@ -263,7 +264,7 @@ int main(int argc, char **argv) {
 
     setTask(node, TASK_NONE);
     RCLCPP_INFO(node->get_logger(), "ALL TASKS DONE, RTL...");
-    setMode(node, rate, "rtl");
+    setMode(node, rate, "land");
     RCLCPP_INFO(node->get_logger(), "=========== ALHAMDULILLAH MISSION COMPLETE ===========");
     rclcpp::shutdown();
     return 0;

@@ -22,13 +22,13 @@
 
     # ── RobotX UAV mission (src/control/src/mission/control.cpp) 
     mission:
-      takeoff_altitude: 20.0
+      takeoff_altitude: 10.0
       hold_time: 1.0
 
       # Task 1: survey point above the Safe Passage arena
-      survey_lat: -35.3632599
-      survey_lon: 149.1653198
-      survey_alt: 20.0             
+      survey_lat: -7.2773591
+      survey_lon: 112.7985255
+      survey_alt: 5.0             
       survey_time: 600.0            
 
       # Task 2 & 3: delivery
