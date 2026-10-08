@@ -43,6 +43,11 @@ def pixel_to_body(u, v, fx, fy, cx, cy, height_m):
     return forward, right
 
 
+def normalized_to_body(xn, yn, height_m):
+    """Same as pixel_to_body but from undistorted normalized coords ((u-cx)/fx, (v-cy)/fy)."""
+    return -yn * height_m, xn * height_m
+
+
 def body_to_ne(forward, right, heading_deg):
     """Rotate body-frame (forward, right) offsets into (north, east)."""
     h = math.radians(heading_deg)
