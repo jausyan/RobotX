@@ -233,6 +233,7 @@ private:
   int stream_bitrate_kbps_;
   cv::VideoWriter stream_writer_;
   bool stream_writer_initialized_ = false;
+  std::chrono::steady_clock::time_point last_stream_write_{};  // send at most stream_fps frames/s
 
   std::vector<double> object_size_m_;   // real object size per class, for solvePnP
   std::vector<bool> is_geo_class_;      // per class: GPS-projected + mapped (Task 1 buoys only)
