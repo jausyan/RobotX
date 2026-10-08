@@ -1,0 +1,19 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    share = get_package_share_directory('robotx_vision')
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=os.path.join(share, 'config', 'robotx_vision.yaml')),
+        Node(package='robotx_vision', executable='robotx_vision',
+             name='robotx_vision_node', output='screen',
+             parameters=[LaunchConfiguration('params_file')]),
+    ])

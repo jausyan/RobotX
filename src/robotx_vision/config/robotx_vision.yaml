@@ -1,0 +1,66 @@
+# Real drone. Run:
+#   ros2 run robotx_vision robotx_vision --ros-args --params-file src/robotx_vision/config/robotx_vision.yaml
+# Write floats with a decimal point (60.0, not 60).
+robotx_vision_node:
+  ros__parameters:
+    input_mode: "device"                 # "device" or "topic"
+    input_source: "/dev/video0"
+    frame_id: "camera"
+
+    # One ONNX per phase (Ultralytics export, static shape, e.g. imgsz=320)
+    task1_model_path: "/home/robotx/RobotX/models/task1_320.onnx"
+    task2_model_path: "/home/robotx/RobotX/models/task2_320.onnx"
+    # Class names are read from the ONNX metadata. If your export has none, set them in
+    # training order, e.g.:
+    # task1_classes: ["red_light", "green_light", "grey_light", "blue_light"]
+    # task2_classes: ["red_circle", "green_circle", "blue_circle", "red_tin", "green_tin", "blue_tin", "green_light"]
+    input_width: 320
+    input_height: 320
+    conf_threshold: 0.4
+    nms_threshold: 0.45
+    letterbox: true
+    use_openvino: true
+    openvino_device: "NPU"               # NPU / CPU / GPU / AUTO
+    infer_when_idle: true                # keep detections on the stream before UAV-GO
+
+    # Camera (replace with your calibration; calib_* = resolution it was made at)
+    use_camera_info: false
+    camera_info_topic: "/camera/camera_info"
+    camera_matrix: [504.99132615, 0.0, 318.4012728,
+                    0.0, 506.13168687, 243.99035432,
+                    0.0, 0.0, 1.0]
+    distortion_coeffs: [0.07771398, -0.18711237, -0.00182709, 0.00026326, -0.06212367]
+    calib_width: 640.0
+    calib_height: 480.0
+    camera_yaw_offset_deg: 0.0
+
+    # Drone state (MAVROS)
+    gps_topic: "/mavros/global_position/global"
+    rel_alt_topic: "/mavros/global_position/rel_alt"
+    heading_topic: "/mavros/global_position/compass_hdg"
+    use_odometry: false
+    target_height_m: 0.0
+    max_sensor_age_s: 1.0
+
+    # Mission I/O (must match the C++ control node)
+    order_topic: "/mission/order"               # communication.order_topic
+    target_topic_prefix: "/vision_geo/target/"  # vision.target_topic_prefix
+    start_mission: 1
+    mapping_time_s: 60.0                        # keep equal to mission.survey_time
+    dist_tol_m: 3.0
+    dedup_tol_m: 1.5
+    blink_min_s: 0.3
+    blink_max_s: 3.0
+    only_publish_ordered: false
+    active_timeout_s: 0.0
+
+    # Display / stream (same pipeline as vision_video)
+    show_window: false
+    window_name: "robotx_vision"
+    enable_stream: true
+    stream_host: "192.168.0.127"
+    stream_port: 5000
+    stream_width: 640
+    stream_height: 480
+    stream_fps: 30
+    stream_bitrate_kbps: 500
