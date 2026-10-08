@@ -1,0 +1,30 @@
+vision_video_node:
+  ros__parameters:
+    input_mode: "device"
+    input_source: "/dev/video0"
+    model_path: "/home/robotx/RobotX/models/payload_krti_320.onnx"
+    input_width: 320
+    input_height: 320
+    conf_threshold: 0.4
+    nms_threshold: 0.45
+    use_camera_info: false
+    camera_info_topic: "/iris_with_camera_2/camera/camera_info"
+    camera_matrix: [504.99132615, 0.0, 318.4012728,
+                    0.0, 506.13168687, 243.99035432,
+                    0.0, 0.0, 1.0]
+    distortion_coeffs: [0.07771398, -0.18711237, -0.00182709, 0.00026326, -0.06212367]
+    object_width_m: 0.3
+    object_height_m: 0.3
+    pose_frame_id: "camera"
+    show_window: false
+    window_name: "vision_video_detection"
+    enable_stream: true
+    stream_host: "100.123.220.55"
+    stream_port: 5000
+    stream_width: 640
+    stream_height: 480
+    stream_fps: 30
+    stream_bitrate_kbps: 500
+    use_openvino: true
+    openvino_device: "NPU"
+    openvino_model_path: ""

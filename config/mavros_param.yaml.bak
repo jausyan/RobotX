@@ -1,0 +1,26 @@
+# mavros_param.yaml
+mavros:
+  ros__parameters: {}
+
+mavros_router:
+  ros__parameters: {}
+  
+mavros_node:
+  ros__parameters:
+    tgt_system: 1
+    tgt_component: 1
+    log_output: "screen"
+    fcu_url: /dev/serial/by-id/usb-ArduPilot_Pixhawk6X_2D004C001151323530363730-if00:115200
+    gcs_url: udp://@192.168.0.127:14550
+
+/**:
+  distance_sensor:
+    id: 1
+    frame_id: "lidar"
+    field_of_view: 0.0 
+    send_tf: false
+    sensor_position: {x:  0.0, y:  0.0, z:  -0.1}
+  rangefinder_sub:
+    subscriber: true
+    id: 1
+    orientation: PITCH_270
