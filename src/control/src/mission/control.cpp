@@ -226,14 +226,14 @@ int main(int argc, char **argv) {
         setMode(node, rate, "AUTO");
         waitForWP(node, rate, 1);
         setMode(node, rate, "GUIDED");
-        holdPosition(node, rate, posee, 5.0);
-        fix_alt(node, rate, posee, survey_alt, 0.3, 60.0);
-        holdPosition(node, rate, posee, 5.0);
+        holdPosition(node, rate, posee, 3.0);
         pubCommand(node, "UAV-GO", order_topic);
+        // holdPosition(node, rate, posee, 60.0);
         // holdPosition(node, rate, posee, 3.0);
         // RCLCPP_INFO(node->get_logger(), "TASK 1: SURVEY ALT REACHED, STARTING VISION...");
         // pubCommand(node, "UAV-GO", order_topic);
-        // waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
+        controlServoRepeated(node, 9, 5);
+        waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
         // setTask(node, TASK_NONE);
         // RCLCPP_INFO(node->get_logger(), "TASK 1: MAPPING DONE, GOING TO USV POSE...");
         // // goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);

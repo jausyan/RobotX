@@ -43,6 +43,7 @@ VisionGeoNode::VisionGeoNode()
   fixed_lon_       = declare_parameter<double>("fixed_lon", 0.0);
   fixed_altitude_m_ = declare_parameter<double>("fixed_altitude_m", 15.0);
   max_pose_age_ms_ = declare_parameter<int>("max_pose_age_ms", 500);
+  altitude_offset_m_ = declare_parameter<double>("altitude_offset_m", 0.0);
 
   // camera mount rotation (camera frame → body FLU frame)
   std::vector<double> rpy = declare_parameter<std::vector<double>>(
@@ -145,9 +146,20 @@ VisionGeoNode::VisionGeoNode()
     RCLCPP_INFO(get_logger(),
       "Fixed pose mode: lat=%.6f lon=%.6f alt=%.1fm | altitude gate from: %s",
       fixed_lat_, fixed_lon_, fixed_altitude_m_, pose_topic_.c_str());
-    home_lat_ = fixed_lat_;
-    home_lon_ = fixed_lon_;
-    home_set_ = true;
+    if (fixed_lat_ == 0.0 && fixed_lon_ == 0.0) {
+      // 0,0 is not a real home: anchor on the live GPS instead (else every buoy lands near 0,0)
+      RCLCPP_WARN(get_logger(),
+        "Fixed pose mode with fixed_lat/lon = 0,0 -> home taken from GPS on %s", gps_topic_.c_str());
+      gps_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+        gps_topic_, rclcpp::SensorDataQoS(),
+        [this](const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
+          gpsCallback(msg);
+        });
+    } else {
+      home_lat_ = fixed_lat_;
+      home_lon_ = fixed_lon_;
+      home_set_ = true;
+    }
   } else {
     gps_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
       gps_topic_, rclcpp::SensorDataQoS(),
@@ -384,12 +396,15 @@ void VisionGeoNode::gpsCallback(const sensor_msgs::msg::NavSatFix::SharedPtr msg
   mavros_state_.lon = msg->longitude;
   mavros_state_.stamp = now();
   mavros_state_.gps_valid = true;
-  if (!home_set_) {
-    home_lat_ = msg->latitude;
-    home_lon_ = msg->longitude;
+  // home = the EKF origin (where local_position/pose is 0,0), so the map does not shift when
+  // vision_geo starts after the drone moved: GPS minus the local offset at the same moment
+  if (!home_set_ && mavros_state_.pose_valid) {
+    home_lat_ = msg->latitude - mavros_state_.y_local / 111320.0;
+    home_lon_ = msg->longitude - mavros_state_.x_local /
+      (111320.0 * std::cos(msg->latitude * M_PI / 180.0));
     home_set_ = true;
-    RCLCPP_INFO(get_logger(), "Home position set: lat=%.6f lon=%.6f",
-      home_lat_, home_lon_);
+    RCLCPP_INFO(get_logger(), "Home (EKF origin) set: lat=%.7f lon=%.7f (drone at E=%.1f N=%.1f m)",
+      home_lat_, home_lon_, mavros_state_.x_local, mavros_state_.y_local);
   }
 }
 
@@ -463,17 +478,19 @@ cv::Mat VisionGeoNode::rpy2mat(double roll_deg, double pitch_deg, double yaw_deg
 // ADDED, so a stationary buoy keeps a fixed map position while the drone flies —
 // it no longer "follows" the camera. GPS lat/lon is derived from the map ENU.
 //
-// Frame convention — empirically verified on this ArduPilot/MAVROS hardware:
-//   x_local → North,  y_local → West (= -East),  z_local → Up
-//   drone_north = x_local,  drone_east = -y_local
+// Frame convention: MAVROS local_position/pose is ENU (REP-105): x = East, y = North, z = Up.
+// Its position and its quaternion share that frame, so the drone position (step 5) and the
+// ray offset (step 4, from the quaternion) must use the SAME axes, or a still buoy smears
+// along the flight path:  drone_east = x_local,  drone_north = y_local
 VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
   float u, float v, const MavrosState & state) const
 {
   GeoPoint result;
 
-  // altitude: always use pose.position.z when available
-  const double alt = state.pose_z_valid ? state.alt_local
-    : (use_fixed_pose_ ? fixed_altitude_m_ : state.alt_agl);
+  // altitude above the water, every frame: pose.position.z is the height above the EKF origin
+  // (takeoff point), + altitude_offset_m = how high the takeoff point is above the water
+  const double alt = (state.pose_z_valid ? state.alt_local
+    : (use_fixed_pose_ ? fixed_altitude_m_ : state.alt_agl)) + altitude_offset_m_;
   if (alt < 0.5) {
     return result;  // too low to project reliably
   }
@@ -516,15 +533,13 @@ VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
   const double offset_east  = t * ray_world.at<double>(0);
   const double offset_north = t * ray_world.at<double>(1);
 
-  // 5. drone position in the map frame (absolute ENU meters from home).
-  //    Empirically verified for this ArduPilot/MAVROS setup:
-  //      x_local = North  (forward, drone_north = x_local)
-  //      y_local = West   (= -East, so drone_east = -y_local)
+  // 5. drone position in the map frame (ENU meters from the EKF origin = home),
+  //    same axes as the quaternion offset above
   double drone_east  = 0.0;
   double drone_north = 0.0;
   if (state.pose_z_valid) {
-    drone_north =  state.x_local;   // x = North
-    drone_east  = -state.y_local;   // y = West → negate to get East
+    drone_east  = state.x_local;    // x = East
+    drone_north = state.y_local;    // y = North
   }
 
   // 6. absolute buoy position in the map frame
@@ -1378,7 +1393,7 @@ void VisionGeoNode::publishMarkers()
 
   // ── drone position marker ─────────────────────────────────────────────────
   {
-    // use local_position/pose (x=East, y=North, z=Up from home) for drone TF.
+    // use local_position/pose (ENU: x=East, y=North, z=Up from home) for drone TF.
     // this is always the actual drone position regardless of use_fixed_pose_ mode.
     double drone_east  = 0.0;
     double drone_north = 0.0;
@@ -1386,9 +1401,9 @@ void VisionGeoNode::publishMarkers()
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (mavros_state_.pose_z_valid) {
-        drone_north =  mavros_state_.x_local;   // x = North
-        drone_east  = -mavros_state_.y_local;   // y = West → negate to get East
-        drone_alt   = mavros_state_.alt_local;
+        drone_east  = mavros_state_.x_local;    // x = East
+        drone_north = mavros_state_.y_local;    // y = North
+        drone_alt   = mavros_state_.alt_local + altitude_offset_m_;
       } else {
         // fallback before first pose message
         drone_alt = use_fixed_pose_ ? fixed_altitude_m_ : mavros_state_.alt_agl;
