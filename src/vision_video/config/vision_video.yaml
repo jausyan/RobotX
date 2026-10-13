@@ -30,7 +30,7 @@ vision_video_node:
     show_window: false
     window_name: "vision_video_detection"
     enable_stream: true
-    stream_host: "192.168.0.116"
+    stream_host: "192.168.0.115"
     stream_port: 5000
     stream_width: 640 #1280 #848
     stream_height: 480 #720 #480
