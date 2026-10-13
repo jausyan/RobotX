@@ -111,3 +111,11 @@ def field_changed(old, new, move_tol_m=0.5):
         if math.hypot(north, east) > move_tol_m:
             return True
     return False
+
+
+def geofence_flat(points):
+    """rx_msgs/LatLng[] -> [lat0, lon0, lat1, lon1, ...] (std_msgs/Float64MultiArray for control)."""
+    flat = []
+    for p in points:
+        flat += [float(p.latitude), float(p.longitude)]
+    return flat

@@ -46,6 +46,12 @@ bool centered = false;
 bool use_task_1;
 bool use_task_2;
 bool use_task_3;
+bool use_geofence;
+int fence_type;
+std::vector<double> geofence_lat;   // fallback when no course arrives from the GCS
+std::vector<double> geofence_lon;
+std::string geofence_topic;
+float geofence_timeout;
 
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
@@ -57,6 +63,10 @@ int main(int argc, char **argv) {
     node->declare_parameter<bool>("mission.use_task_1", true);
     node->declare_parameter<bool>("mission.use_task_2", true);
     node->declare_parameter<bool>("mission.use_task_3", true);
+    node->declare_parameter<bool>("mission.use_geofence", true);
+    node->declare_parameter<int>("mission.fence_type", 4);
+    node->declare_parameter<std::vector<double>>("mission.geofence_lat", std::vector<double>{0.0});
+    node->declare_parameter<std::vector<double>>("mission.geofence_lon", std::vector<double>{0.0});
     node->declare_parameter<std::vector<double>>("mission.survey_lat", std::vector<double>{0.0});
     node->declare_parameter<std::vector<double>>("mission.survey_lon", std::vector<double>{0.0});
     node->declare_parameter<float>("mission.survey_alt", 18.0);
@@ -68,6 +78,8 @@ int main(int argc, char **argv) {
     node->declare_parameter<std::string>("communication.usv_gps_topic", "/USV/global_position/global");
     node->declare_parameter<float>("communication.command_timeout", 600.0);
     node->declare_parameter<float>("communication.run_start_timeout", 3600.0);
+    node->declare_parameter<std::string>("communication.geofence_topic", "/mission/geofence");
+    node->declare_parameter<float>("communication.geofence_timeout", 10.0);
     node->declare_parameter<std::string>("vision.target_topic_prefix", "/vision_geo/target/");
     node->declare_parameter<float>("centering_red.speed_xy", 0.75);
     node->declare_parameter<float>("centering_red.acc", 0.05);
@@ -95,6 +107,10 @@ int main(int argc, char **argv) {
     node->get_parameter("mission.use_task_1", use_task_1);
     node->get_parameter("mission.use_task_2", use_task_2);
     node->get_parameter("mission.use_task_3", use_task_3);
+    node->get_parameter("mission.use_geofence", use_geofence);
+    node->get_parameter("mission.fence_type", fence_type);
+    node->get_parameter("mission.geofence_lat", geofence_lat);
+    node->get_parameter("mission.geofence_lon", geofence_lon);
     node->get_parameter("mission.survey_lat", survey_lat);
     node->get_parameter("mission.survey_lon", survey_lon);
     node->get_parameter("mission.survey_alt", survey_alt);
@@ -106,6 +122,8 @@ int main(int argc, char **argv) {
     node->get_parameter("communication.usv_gps_topic", usv_gps_topic);
     node->get_parameter("communication.command_timeout", command_timeout);
     node->get_parameter("communication.run_start_timeout", run_start_timeout);
+    node->get_parameter("communication.geofence_topic", geofence_topic);
+    node->get_parameter("communication.geofence_timeout", geofence_timeout);
     node->get_parameter("vision.target_topic_prefix", target_topic_prefix);
     node->get_parameter("centering_red.speed_xy", speed_xy);
     node->get_parameter("centering_red.acc", acc);
@@ -160,6 +178,23 @@ int main(int argc, char **argv) {
         RCLCPP_INFO(node->get_logger(), "Wait local pose data...");
         rclcpp::spin_some(node);
         rate.sleep();
+    }
+
+    // geofence: the UAV geofence from /system/mission/course (relayed by uav_bridge), else the config one
+    if (use_geofence) {
+        std::vector<double> fence_lat, fence_lon;
+        if (!waitGeofence(node, geofence_topic, geofence_timeout, fence_lat, fence_lon)) {
+            RCLCPP_WARN(node->get_logger(), "GEOFENCE: no course from the GCS, using mission.geofence_lat/lon (%zu vertices)", geofence_lat.size());
+            fence_lat = geofence_lat;
+            fence_lon = geofence_lon;
+        }
+        if (!pushGeofence(node, fence_lat, fence_lon, fence_type)) {
+            RCLCPP_ERROR(node->get_logger(), "=========== GEOFENCE NOT PUSHED -> ABORT (drone not armed), set mission.use_geofence false to fly without ===========");
+            rclcpp::shutdown();
+            return 1;
+        }
+    } else {
+        RCLCPP_WARN(node->get_logger(), "GEOFENCE: SKIPPED (mission.use_geofence = false)");
     }
 
     setTask(node, TASK_NONE);

@@ -1583,6 +1583,88 @@ void clearMission(const std::shared_ptr<DroneController>&node) {
     } else {RCLCPP_ERROR(node->get_logger(), "Failed to receive response");}
 }
 
+bool pushGeofence(const std::shared_ptr<DroneController>&node, const std::vector<double> &lat, const std::vector<double> &lon, int fence_type) {
+    if (lat.size() != lon.size()) {
+        RCLCPP_ERROR(node->get_logger(), "Geofence: %zu lat vs %zu lon, not pushed", lat.size(), lon.size());
+        return false;
+    }
+    size_t n = lat.size();
+    if (n > 1 && lat.front() == lat.back() && lon.front() == lon.back()) n--;   // closed polygon -> drop the repeated first vertex
+    if (n < 3) {
+        RCLCPP_ERROR(node->get_logger(), "Geofence: needs at least 3 vertices (got %zu), not pushed", n);
+        return false;
+    }
+
+    // ArduPilot fence = one MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION item per vertex, param1 = vertex count
+    auto request = std::make_shared<mavros_msgs::srv::WaypointPush::Request>();
+    request->start_index = 0;
+    for (size_t i = 0; i < n; i++) {
+        mavros_msgs::msg::Waypoint wp;
+        wp.frame = mavros_msgs::msg::Waypoint::FRAME_GLOBAL;
+        wp.command = 5001;   // MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION
+        wp.autocontinue = true;
+        wp.param1 = static_cast<float>(n);
+        wp.x_lat = lat[i];
+        wp.y_long = lon[i];
+        request->waypoints.push_back(wp);
+        RCLCPP_INFO(node->get_logger(), "Geofence vertex %zu: lat=%.7f lon=%.7f", i, lat[i], lon[i]);
+    }
+
+    RCLCPP_INFO(node->get_logger(), "Pushing geofence of %zu vertices", n);
+    auto future_result = node->pushGeofence_(request);
+    bool ok = false;
+    if (hasReplied(node, future_result)) { auto result = future_result.get();
+        ok = result->success;
+        if (ok) { RCLCPP_INFO(node->get_logger(), "Geofence pushed (%u items)", result->wp_transfered); }
+        else    { RCLCPP_ERROR(node->get_logger(), "failed to push geofence"); }
+    } else {RCLCPP_ERROR(node->get_logger(), "Failed to receive response");}
+
+    if (ok) {
+        if (fence_type > 0) setParam(node, "FENCE_TYPE", fence_type);
+        setParam(node, "FENCE_ENABLE", 1);
+    }
+    return ok;
+}
+
+void clearGeofence(const std::shared_ptr<DroneController>&node) {
+    auto request = std::make_shared<mavros_msgs::srv::WaypointClear::Request>();
+
+    auto future_result = node->clearGeofence_(request);
+
+    if (hasReplied(node,future_result)) { auto result = future_result.get();
+        if (result->success) { RCLCPP_INFO(node->get_logger(), "Geofence cleared");}
+        else                 { RCLCPP_ERROR(node->get_logger(), "failed to clear geofence");}
+    } else {RCLCPP_ERROR(node->get_logger(), "Failed to receive response");}
+}
+
+bool waitGeofence(const std::shared_ptr<DroneController>&node, const std::string &topic, float timeout, std::vector<double> &lat, std::vector<double> &lon) {
+    bool received = false;
+    auto sub = node->create_subscription<std_msgs::msg::Float64MultiArray>(topic,
+        rclcpp::QoS(1).reliable().transient_local(),
+        [&](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+            lat.clear(); lon.clear();
+            for (size_t i = 0; i + 1 < msg->data.size(); i += 2) {
+                lat.push_back(msg->data[i]);
+                lon.push_back(msg->data[i + 1]);
+            }
+            received = true;
+        });
+
+    RCLCPP_INFO(node->get_logger(), "Waiting for geofence on %s (timeout: %.0fs)...", topic.c_str(), timeout);
+    const auto start_time = node->now();
+    rclcpp::Rate loop_rate(10.0);
+    while (rclcpp::ok() && !received) {
+        if ((node->now() - start_time).seconds() > timeout) {
+            RCLCPP_WARN(node->get_logger(), "No geofence on %s after %.0fs", topic.c_str(), timeout);
+            return false;
+        }
+        rclcpp::spin_some(node);
+        loop_rate.sleep();
+    }
+    RCLCPP_INFO(node->get_logger(), "Geofence received: %zu vertices", lat.size());
+    return received;
+}
+
 void waitForWP(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, int seq) {
     while (rclcpp::ok()) {
         if(node->current_wp_() >= seq){
