@@ -20,25 +20,23 @@
       min_pole_height: 0.5
       target_height: 0.75
 
-    # ── RobotX UAV mission (src/control/src/mission/control.cpp) 
     mission:
       takeoff_altitude: 10.0
       hold_time: 1.0
 
-      # Task 1: survey point above the Safe Passage arena
-      survey_lat: -7.2773591
-      survey_lon: 112.7985255
-      survey_alt: 5.0             
+      use_task_1: true
+      use_task_2: false
+      use_task_3: false
+
+      survey_lat: [-7.2773625, -7.2773631]   # <- replace [1]..[3] with the real points
+      survey_lon: [112.7985393, 112.7985405]
+      survey_alt: 2.0             
       survey_time: 600.0            
 
       # Task 2 & 3: delivery
       usv_alt: 20.0                
       approach_alt: 10.0           # first centering altitude above the circle
-      drop_alt: 10.0                # final centering + drop altitude
-      task2_lat: -6.914800         # Task 2 platform (fly here, then center on the circle)
-      task2_lon: 107.609900
-      task3_lat: -6.914850         # Task 3 platform (the OTHER platform)
-      task3_lon: 107.609950
+      drop_alt: 1.0               # final centering + drop altitude
 
     communication:
       order_topic: "/mission/order"                 # "UAV-GO" / "UAV-GO:<TIN>:<CIRCLE>" / "UAV-HOLD"
@@ -50,18 +48,43 @@
       target_topic_prefix: "/vision_geo/target/"   # + circle_<color> → centering_red() (closest one)
 
     centering_red:
-      speed_xy: 0.75
-      acc: 0.05
-      maxAccel: 0.20
-      X: 0.0
+      Ki_hold: 0.15 # 0.08
+      MAX_I_HOLD: 0.5 #0.5
+      MAX_I_CONTRIB: 0.35 # 0.35 # 0.15
+      D_FILTER_ALPHA: 0.25
+      Ki: 0.22
+      kp: 1.6 # 2.0 (Default), 1.5
+      kd: 0.28 # 0.2 (Default), 0.2
+      min_velocity: 0.02
+      speed_xy: 0.15 # 0.10 (Default), 0.15
+      acc: 0.20 # 0.35 # 0.08
+      maxAccel: 0.7 # 0.35
+      X: 0.30
       Y: 0.0
-      min_center_time: 0.2
+      min_center_time: 0.02 #1.0
       max_center_pitch: 2.5
       max_center_roll: 2.5
       hover_pitch: 0.0
       hover_roll: 0.0
-      centering_tolerance: 0.15
       recovery_method: "local_pose"
+      centering_tolerance_first: 0.50 # 0.10 # 0.07 or 0.08 is safe
+      centering_tolerance_second: 0.20        
+      hold_kp: 1.2
+      detect_timeout: 0.4 
+
+    # centering_red:
+    #   speed_xy: 0.75
+    #   acc: 0.05
+    #   maxAccel: 0.20
+    #   X: 0.0
+    #   Y: 0.0
+    #   min_center_time: 0.2
+    #   max_center_pitch: 2.5
+    #   max_center_roll: 2.5
+    #   hover_pitch: 0.0
+    #   hover_roll: 0.0
+    #   centering_tolerance: 0.15
+    #   recovery_method: "local_pose"
 
     servo:                         # PLACEHOLDERS — servo not mapped yet
       channel_red: 9               # dropper holding the RED tin

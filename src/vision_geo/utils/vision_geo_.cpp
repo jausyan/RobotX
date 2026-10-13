@@ -17,6 +17,11 @@ VisionGeoNode::VisionGeoNode()
   model_path_      = declare_parameter<std::string>("model_path", "best.onnx");
   input_width_     = declare_parameter<int>("input_width", 320);
   input_height_    = declare_parameter<int>("input_height", 320);
+  letterbox_       = declare_parameter<bool>("letterbox", true);
+  camera_width_    = declare_parameter<int>("camera_width", 0);
+  camera_height_   = declare_parameter<int>("camera_height", 0);
+  camera_fps_      = declare_parameter<int>("camera_fps", 0);
+  camera_fourcc_   = declare_parameter<std::string>("camera_fourcc", "");
   conf_threshold_  = declare_parameter<double>("conf_threshold", 0.4);
   nms_threshold_   = declare_parameter<double>("nms_threshold", 0.45);
   // OpenVINO (same params as vision_video)
@@ -68,6 +73,8 @@ VisionGeoNode::VisionGeoNode()
   stream_height_       = declare_parameter<int>("stream_height", 480);
   stream_fps_          = declare_parameter<int>("stream_fps", 30);
   stream_bitrate_kbps_ = declare_parameter<int>("stream_bitrate_kbps", 500);
+  stream_undistort_ = declare_parameter<bool>("stream_undistort", false);
+  stream_undistort_alpha_ = declare_parameter<double>("stream_undistort_alpha", 1.0);
 
   // mission order (read by main() in src/vision_geo.cpp) + per-class topics
   declare_parameter<std::string>("order_topic", "/mission/order");
@@ -291,6 +298,27 @@ void VisionGeoNode::openInputSource()
   if (!capture_.isOpened()) {
     throw std::runtime_error("failed to open input: " + input_source_);
   }
+  // camera mode: FOURCC first (MJPG is needed for 720p/1080p at 30 fps), then size and fps
+  if (using_camera_device_) {
+    if (camera_fourcc_.size() == 4) {
+      capture_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc(
+        camera_fourcc_[0], camera_fourcc_[1], camera_fourcc_[2], camera_fourcc_[3]));
+    }
+    if (camera_width_ > 0 && camera_height_ > 0) {
+      capture_.set(cv::CAP_PROP_FRAME_WIDTH, camera_width_);
+      capture_.set(cv::CAP_PROP_FRAME_HEIGHT, camera_height_);
+    }
+    if (camera_fps_ > 0) {
+      capture_.set(cv::CAP_PROP_FPS, camera_fps_);
+    }
+    const int code = static_cast<int>(capture_.get(cv::CAP_PROP_FOURCC));
+    const std::string fourcc{static_cast<char>(code & 255), static_cast<char>((code >> 8) & 255),
+                             static_cast<char>((code >> 16) & 255), static_cast<char>((code >> 24) & 255)};
+    RCLCPP_INFO(get_logger(), "Camera mode: %.0fx%.0f %s @ %.0f fps (asked %dx%d %s @ %d)",
+      capture_.get(cv::CAP_PROP_FRAME_WIDTH), capture_.get(cv::CAP_PROP_FRAME_HEIGHT), fourcc.c_str(),
+      capture_.get(cv::CAP_PROP_FPS), camera_width_, camera_height_,
+      camera_fourcc_.empty() ? "default" : camera_fourcc_.c_str(), camera_fps_);
+  }
   RCLCPP_INFO(get_logger(), "Input: %s", input_source_.c_str());
 }
 
@@ -451,8 +479,15 @@ VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
   }
 
   // 1. pixel → camera ray
-  cv::Mat pixel = (cv::Mat_<double>(3, 1) << static_cast<double>(u),
-                                              static_cast<double>(v),
+  // 0. remove lens distortion (wide lens: edges bend most) using the calibration
+  cv::Point2f px(u, v);
+  if (!dist_coeffs_.empty() && cv::countNonZero(dist_coeffs_) > 0) {
+    std::vector<cv::Point2f> in{px}, out;
+    cv::undistortPoints(in, out, camera_matrix_, dist_coeffs_, cv::noArray(), camera_matrix_);
+    px = out[0];
+  }
+  cv::Mat pixel = (cv::Mat_<double>(3, 1) << static_cast<double>(px.x),
+                                              static_cast<double>(px.y),
                                               1.0);
   cv::Mat ray_cam = K_inv_ * pixel;
 
@@ -737,9 +772,24 @@ std::vector<VisionGeoNode::Detection> VisionGeoNode::infer(const cv::Mat & frame
 {
   std::vector<Detection> detections;
 
+  // letterbox: keep the aspect ratio (a 16:9 frame is not squashed into the model input)
+  cv::Mat model_in = frame;
+  lb_scale_ = 1.0f; lb_pad_x_ = 0; lb_pad_y_ = 0;
+  if (letterbox_) {
+    lb_scale_ = std::min(static_cast<float>(input_width_) / frame.cols,
+                         static_cast<float>(input_height_) / frame.rows);
+    const int new_w = static_cast<int>(std::round(frame.cols * lb_scale_));
+    const int new_h = static_cast<int>(std::round(frame.rows * lb_scale_));
+    lb_pad_x_ = (input_width_ - new_w) / 2;
+    lb_pad_y_ = (input_height_ - new_h) / 2;
+    cv::Mat resized;
+    cv::resize(frame, resized, cv::Size(new_w, new_h));
+    model_in = cv::Mat(input_height_, input_width_, CV_8UC3, cv::Scalar(114, 114, 114));
+    resized.copyTo(model_in(cv::Rect(lb_pad_x_, lb_pad_y_, new_w, new_h)));
+  }
   cv::Mat blob;
   cv::dnn::blobFromImage(
-    frame, blob, 1.0 / 255.0, cv::Size(input_width_, input_height_),
+    model_in, blob, 1.0 / 255.0, cv::Size(input_width_, input_height_),
     cv::Scalar(), true, false);
 
   cv::Mat out;
@@ -754,8 +804,13 @@ std::vector<VisionGeoNode::Detection> VisionGeoNode::infer(const cv::Mat & frame
   if (num_features < 5) return detections;
 
   const int num_classes = num_features - 4;
-  const float x_scale = static_cast<float>(frame.cols) / static_cast<float>(input_width_);
-  const float y_scale = static_cast<float>(frame.rows) / static_cast<float>(input_height_);
+  // model input -> frame pixels (letterbox: remove the padding, undo the scale)
+  const float x_scale = letterbox_ ? 1.0f / lb_scale_
+                                   : static_cast<float>(frame.cols) / static_cast<float>(input_width_);
+  const float y_scale = letterbox_ ? 1.0f / lb_scale_
+                                   : static_cast<float>(frame.rows) / static_cast<float>(input_height_);
+  const float x_pad = letterbox_ ? static_cast<float>(lb_pad_x_) : 0.0f;
+  const float y_pad = letterbox_ ? static_cast<float>(lb_pad_y_) : 0.0f;
 
   std::vector<int> class_ids;
   std::vector<float> confidences;
@@ -780,8 +835,8 @@ std::vector<VisionGeoNode::Detection> VisionGeoNode::infer(const cv::Mat & frame
     }
     if (best_score < static_cast<float>(conf_threshold_)) continue;
 
-    int left  = static_cast<int>((cx - 0.5f * w) * x_scale);
-    int top   = static_cast<int>((cy - 0.5f * h) * y_scale);
+    int left  = static_cast<int>((cx - 0.5f * w - x_pad) * x_scale);
+    int top   = static_cast<int>((cy - 0.5f * h - y_pad) * y_scale);
     int width = static_cast<int>(w * x_scale);
     int height = static_cast<int>(h * y_scale);
     cv::Rect box(left, top, width, height);
@@ -1613,8 +1668,11 @@ void VisionGeoNode::streamFrame(
   last_stream_write_ = t;
   // draw at the source size (boxes are in source pixels), then scale to the stream size
   cv::Mat annotated = frame.clone();
-  drawCrosshair(annotated);
-  drawDetections(annotated, dets, geo);
+  drawDetections(annotated, dets, geo);            // boxes first: they bend with the picture and stay on their objects
+  if (stream_undistort_) {
+    undistortForStream(annotated);
+  }
+  drawCrosshair(annotated);                 // after: stays straight
   cv::Mat out;
   if (annotated.cols != stream_width_ || annotated.rows != stream_height_) {
     cv::resize(annotated, out, cv::Size(stream_width_, stream_height_));
@@ -1674,4 +1732,25 @@ bool waitCommand(const rclcpp::Node::SharedPtr & node, const std::string & expec
     loop_rate.sleep();
   }
   return false;
+}
+
+// Straighten the stream copy with the calibration (camera_matrix / distortion_coeffs).
+// Only for viewing: detection, centering and GPS keep using the raw (distorted) image.
+void VisionGeoNode::undistortForStream(cv::Mat & img)
+{
+  if (camera_matrix_.empty() || dist_coeffs_.empty() || cv::countNonZero(dist_coeffs_) == 0) {
+    return;
+  }
+  if (stream_map1_.empty() || stream_map_size_ != img.size()) {
+    const cv::Mat new_k = cv::getOptimalNewCameraMatrix(
+      camera_matrix_, dist_coeffs_, img.size(), stream_undistort_alpha_, img.size());
+    cv::initUndistortRectifyMap(camera_matrix_, dist_coeffs_, cv::Mat(), new_k, img.size(),
+      CV_16SC2, stream_map1_, stream_map2_);
+    stream_map_size_ = img.size();
+    RCLCPP_INFO(get_logger(), "Stream undistort enabled (%dx%d, alpha %.2f)",
+      img.cols, img.rows, stream_undistort_alpha_);
+  }
+  cv::Mat out;
+  cv::remap(img, out, stream_map1_, stream_map2_, cv::INTER_LINEAR);
+  img = out;
 }

@@ -1,16 +1,34 @@
-
 /**/mavros_node:
   ros__parameters:
     fcu_url: "/dev/serial/by-id/usb-ArduPilot_Pixhawk6X_2D004C001151323530363730-if00:115200"
-    gcs_url: "udp://@100.95.74.67:14550"
+    gcs_url: "udp://@192.168.0.116:14550"
     tgt_system: 1
     tgt_component: 1
     fcu_protocol: "v2.0"
     log_output: "screen"
 
+/**/mavros:
+  ros__parameters:
+    plugin_denylist: ["*"]
+    plugin_allowlist:
+      - sys_status          # state, set_mode (control, uav_bridge heartbeat)
+      - sys_time            # time sync with the FCU
+      - command             # cmd/arming, cmd/takeoff, cmd/land, cmd/command (servo drop)
+      - imu                 # attitude -> orientation of local_position/pose (vision_geo, heading)
+      - global_position     # global_position/global, rel_alt, compass_hdg
+      - local_position      # local_position/pose, velocity_body, velocity_local, accel
+      - setpoint_position   # setpoint_position/local (holdPosition, fix_alt)
+      - setpoint_raw        # setpoint_raw/local (centering_red), setpoint_raw/global
+      - setpoint_velocity   # setpoint_velocity/cmd_vel(_unstamped)
+      - waypoint            # mission/push, mission/clear, mission/reached (AUTO legs)
+      - param               # param/set
+      - rangefinder         # rangefinder/rangefinder (control altitude)
+      - distance_sensor     # rangefinder_pub (config below)
+      - gps_status          # gpsstatus/gps1/raw
+
 /**/distance_sensor:
   ros__parameters:
-    config: 
+    config: |
       rangefinder_pub:
         id: 0
         frame_id: "lidar"

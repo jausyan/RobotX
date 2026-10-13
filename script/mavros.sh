@@ -11,4 +11,4 @@ ros2 run mavros mavros_node --ros-args \
   --params-file "$MAVROS_LAUNCH/apm_pluginlists.yaml" \
   --params-file "$MAVROS_LAUNCH/apm_config.yaml" \
   --params-file "$CONFIG" \
-  -r __ns:=/rian
+  -r __ns:=/rian "$@"

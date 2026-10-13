@@ -11,6 +11,11 @@ VisionVideoNode::VisionVideoNode()
   input_source_ = declare_parameter<std::string>("input_source", "/dev/video0");
   input_width_  = declare_parameter<int>("input_width", 320);
   input_height_ = declare_parameter<int>("input_height", 320);
+  letterbox_ = declare_parameter<bool>("letterbox", true);
+  camera_width_ = declare_parameter<int>("camera_width", 0);
+  camera_height_ = declare_parameter<int>("camera_height", 0);
+  camera_fps_ = declare_parameter<int>("camera_fps", 0);
+  camera_fourcc_ = declare_parameter<std::string>("camera_fourcc", "");
   use_camera_info_   = declare_parameter<bool>("use_camera_info", false);
   camera_info_topic_ = declare_parameter<std::string>("camera_info_topic", "/iris_with_camera_2/camera/camera_info");
   conf_threshold_ = declare_parameter<double>("conf_threshold", 0.4);
@@ -24,6 +29,8 @@ VisionVideoNode::VisionVideoNode()
   stream_height_ = declare_parameter<int>("stream_height", 480);
   stream_fps_ = declare_parameter<int>("stream_fps", 30);
   stream_bitrate_kbps_ = declare_parameter<int>("stream_bitrate_kbps", 500);
+  stream_undistort_ = declare_parameter<bool>("stream_undistort", false);
+  stream_undistort_alpha_ = declare_parameter<double>("stream_undistort_alpha", 1.0);
   use_openvino_ = declare_parameter<bool>("use_openvino", false);
   openvino_device_ = declare_parameter<std::string>("openvino_device", "CPU");
   openvino_model_path_ = declare_parameter<std::string>("openvino_model_path", "");
@@ -185,6 +192,28 @@ void VisionVideoNode::openInputSource()
 
   if (!capture_.isOpened()) {
     throw std::runtime_error("failed to open input source: " + input_source_);
+  }
+
+  // camera mode: FOURCC first (MJPG is needed for 720p/1080p at 30 fps), then size and fps
+  if (using_camera_device_) {
+    if (camera_fourcc_.size() == 4) {
+      capture_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc(
+        camera_fourcc_[0], camera_fourcc_[1], camera_fourcc_[2], camera_fourcc_[3]));
+    }
+    if (camera_width_ > 0 && camera_height_ > 0) {
+      capture_.set(cv::CAP_PROP_FRAME_WIDTH, camera_width_);
+      capture_.set(cv::CAP_PROP_FRAME_HEIGHT, camera_height_);
+    }
+    if (camera_fps_ > 0) {
+      capture_.set(cv::CAP_PROP_FPS, camera_fps_);
+    }
+    const int code = static_cast<int>(capture_.get(cv::CAP_PROP_FOURCC));
+    const std::string fourcc{static_cast<char>(code & 255), static_cast<char>((code >> 8) & 255),
+                             static_cast<char>((code >> 16) & 255), static_cast<char>((code >> 24) & 255)};
+    RCLCPP_INFO(get_logger(), "Camera mode: %.0fx%.0f %s @ %.0f fps (asked %dx%d %s @ %d)",
+      capture_.get(cv::CAP_PROP_FRAME_WIDTH), capture_.get(cv::CAP_PROP_FRAME_HEIGHT), fourcc.c_str(),
+      capture_.get(cv::CAP_PROP_FPS), camera_width_, camera_height_,
+      camera_fourcc_.empty() ? "default" : camera_fourcc_.c_str(), camera_fps_);
   }
 
   const char * mode = using_camera_device_ ? "camera device" : "video file";
@@ -492,14 +521,25 @@ void VisionVideoNode::streamFrame(const cv::Mat & frame, const std::vector<Detec
   if (!ensureStreamWriter()) {
     return;
   }
-  cv::Mat out;
-  if (frame.cols != stream_width_ || frame.rows != stream_height_) {
-    cv::resize(frame, out, cv::Size(stream_width_, stream_height_));
-  } else {
-    out = frame.clone();
+  // send at most stream_fps frames per second (the stream is only for monitoring)
+  const auto t = std::chrono::steady_clock::now();
+  if (t - last_stream_write_ < std::chrono::duration<double>(1.0 / std::max(1, stream_fps_))) {
+    return;
   }
-  drawCrosshair(out);
-  drawDetections(out, detections);
+  last_stream_write_ = t;
+  // draw at the source size (boxes are in source pixels), then scale to the stream size
+  cv::Mat annotated = frame.clone();
+  drawDetections(annotated, detections);            // boxes first: they bend with the picture and stay on their objects
+  if (stream_undistort_) {
+    undistortForStream(annotated);
+  }
+  drawCrosshair(annotated);                 // after: stays straight
+  cv::Mat out;
+  if (annotated.cols != stream_width_ || annotated.rows != stream_height_) {
+    cv::resize(annotated, out, cv::Size(stream_width_, stream_height_));
+  } else {
+    out = annotated;
+  }
   stream_writer_.write(out);
 }
 
@@ -568,9 +608,24 @@ std::vector<VisionVideoNode::Detection> VisionVideoNode::infer(const cv::Mat & f
 {
   std::vector<Detection> detections;
 
+  // letterbox: keep the aspect ratio (a 16:9 frame is not squashed into the model input)
+  cv::Mat model_in = frame;
+  lb_scale_ = 1.0f; lb_pad_x_ = 0; lb_pad_y_ = 0;
+  if (letterbox_) {
+    lb_scale_ = std::min(static_cast<float>(input_width_) / frame.cols,
+                         static_cast<float>(input_height_) / frame.rows);
+    const int new_w = static_cast<int>(std::round(frame.cols * lb_scale_));
+    const int new_h = static_cast<int>(std::round(frame.rows * lb_scale_));
+    lb_pad_x_ = (input_width_ - new_w) / 2;
+    lb_pad_y_ = (input_height_ - new_h) / 2;
+    cv::Mat resized;
+    cv::resize(frame, resized, cv::Size(new_w, new_h));
+    model_in = cv::Mat(input_height_, input_width_, CV_8UC3, cv::Scalar(114, 114, 114));
+    resized.copyTo(model_in(cv::Rect(lb_pad_x_, lb_pad_y_, new_w, new_h)));
+  }
   cv::Mat blob;
   cv::dnn::blobFromImage(
-    frame, blob, 1.0 / 255.0, cv::Size(input_width_, input_height_),
+    model_in, blob, 1.0 / 255.0, cv::Size(input_width_, input_height_),
     cv::Scalar(), true, false);
   cv::Mat out;
 
@@ -739,8 +794,13 @@ std::vector<VisionVideoNode::Detection> VisionVideoNode::infer(const cv::Mat & f
   }
 
   const int num_classes = num_features - 4;
-  const float x_scale = static_cast<float>(frame.cols) / static_cast<float>(input_width_);
-  const float y_scale = static_cast<float>(frame.rows) / static_cast<float>(input_height_);
+  // model input -> frame pixels (letterbox: remove the padding, undo the scale)
+  const float x_scale = letterbox_ ? 1.0f / lb_scale_
+                                   : static_cast<float>(frame.cols) / static_cast<float>(input_width_);
+  const float y_scale = letterbox_ ? 1.0f / lb_scale_
+                                   : static_cast<float>(frame.rows) / static_cast<float>(input_height_);
+  const float x_pad = letterbox_ ? static_cast<float>(lb_pad_x_) : 0.0f;
+  const float y_pad = letterbox_ ? static_cast<float>(lb_pad_y_) : 0.0f;
 
   std::vector<int> class_ids;
   std::vector<float> confidences;
@@ -774,8 +834,8 @@ std::vector<VisionVideoNode::Detection> VisionVideoNode::infer(const cv::Mat & f
       continue;
     }
 
-    int left   = static_cast<int>((cx - 0.5f * w) * x_scale);
-    int top    = static_cast<int>((cy - 0.5f * h) * y_scale);
+    int left   = static_cast<int>((cx - 0.5f * w - x_pad) * x_scale);
+    int top    = static_cast<int>((cy - 0.5f * h - y_pad) * y_scale);
     int width  = static_cast<int>(w * x_scale);
     int height = static_cast<int>(h * y_scale);
     cv::Rect box(left, top, width, height);
@@ -801,4 +861,25 @@ std::vector<VisionVideoNode::Detection> VisionVideoNode::infer(const cv::Mat & f
     detections.push_back(Detection{class_ids[idx], confidences[idx], boxes[idx]});
   }
   return detections;
+}
+
+// Straighten the stream copy with the calibration (camera_matrix / distortion_coeffs).
+// Only for viewing: detection, centering and GPS keep using the raw (distorted) image.
+void VisionVideoNode::undistortForStream(cv::Mat & img)
+{
+  if (camera_matrix_.empty() || dist_coeffs_.empty() || cv::countNonZero(dist_coeffs_) == 0) {
+    return;
+  }
+  if (stream_map1_.empty() || stream_map_size_ != img.size()) {
+    const cv::Mat new_k = cv::getOptimalNewCameraMatrix(
+      camera_matrix_, dist_coeffs_, img.size(), stream_undistort_alpha_, img.size());
+    cv::initUndistortRectifyMap(camera_matrix_, dist_coeffs_, cv::Mat(), new_k, img.size(),
+      CV_16SC2, stream_map1_, stream_map2_);
+    stream_map_size_ = img.size();
+    RCLCPP_INFO(get_logger(), "Stream undistort enabled (%dx%d, alpha %.2f)",
+      img.cols, img.rows, stream_undistort_alpha_);
+  }
+  cv::Mat out;
+  cv::remap(img, out, stream_map1_, stream_map2_, cv::INTER_LINEAR);
+  img = out;
 }

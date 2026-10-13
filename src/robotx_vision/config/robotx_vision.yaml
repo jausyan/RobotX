@@ -4,16 +4,16 @@
 robotx_vision_node:
   ros__parameters:
     input_mode: "device"                 # "device" or "topic"
-    input_source: "/dev/video0"
+    input_source: "/dev/video2"
     frame_id: "camera"
 
     # One ONNX per phase (Ultralytics export, static shape, e.g. imgsz=320)
-    task1_model_path: "/home/robotx/RobotX/models/payload_krti_320.onnx"
-    task2_model_path: "/home/robotx/RobotX/models/payload_krti_320.onnx"
+    task1_model_path: "/home/robotx/RobotX/models/b1.onnx"
+    task2_model_path: "/home/robotx/RobotX/models/b1.onnx"
     # Class names are read from the ONNX metadata. If your export has none, set them in
     # training order, e.g.:
-    task1_classes: ["payload"]
-    task2_classes: ["payload"]
+    task1_classes: ['black_buoy', 'blue_buoy', 'blue_circle', 'green_buoy', 'green_circle', 'red_buoy', 'red_circle']
+    task2_classes: ['black_buoy', 'blue_buoy', 'blue_circle', 'green_buoy', 'green_circle', 'red_buoy', 'red_circle']
     #task1_classes: ["red_light", "green_light", "grey_light", "blue_light"]
     #task2_classes: ["red_circle", "green_circle", "blue_circle", "red_tin", "green_tin", "blue_tin", "green_light"]
     input_width: 320
@@ -60,7 +60,8 @@ robotx_vision_node:
     show_window: false
     window_name: "robotx_vision"
     enable_stream: true
-    stream_host: "100.123.220.55"
+    stream_host: "192.168.0.180"
+    #stream_host: "100.123.220.55"
     stream_port: 5000
     stream_width: 640
     stream_height: 480
