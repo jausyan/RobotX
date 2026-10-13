@@ -5,6 +5,7 @@ vision_video_node:
     model_path: "/home/el-system/robotX/models/payload_krti_320.onnx"
     input_width: 320
     input_height: 320
+    letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)
     conf_threshold: 0.4
     nms_threshold: 0.45
     use_camera_info: true
@@ -23,6 +24,8 @@ vision_video_node:
     stream_height: 480
     stream_fps: 30
     stream_bitrate_kbps: 500
+    stream_undistort: false         # straighten ONLY the stream (detection/GPS keep the raw image)
+    stream_undistort_alpha: 1.0     # 1.0 = whole view (black curved borders), 0.0 = crop to clean rectangle
     use_openvino: false
     openvino_device: "CPU"
     openvino_model_path: ""

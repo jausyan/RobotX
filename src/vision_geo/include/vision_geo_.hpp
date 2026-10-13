@@ -180,6 +180,7 @@ private:
 
   // ── GStreamer stream (same as vision_hailo: RTP/H.264 over UDP) ─────────────
   bool ensureStreamWriter();
+  void undistortForStream(cv::Mat & img);
   void streamFrame(
     const cv::Mat & frame,
     const std::vector<Detection> & dets,
@@ -202,6 +203,15 @@ private:
   std::string model_path_;
   int input_width_;
   int input_height_;
+  bool letterbox_ = true;        // keep the aspect ratio into the model input (pad, like ultralytics)
+  float lb_scale_ = 1.0f;        // letterbox of the current frame: model = frame * scale + pad
+  int lb_pad_x_ = 0;
+  int lb_pad_y_ = 0;
+  // camera device mode (0 / "" = driver default, e.g. 640x480 YUYV on the C922)
+  int camera_width_ = 0;
+  int camera_height_ = 0;
+  int camera_fps_ = 0;
+  std::string camera_fourcc_;
   double conf_threshold_;
   double nms_threshold_;
   std::vector<std::string> class_names_;
@@ -232,6 +242,10 @@ private:
   int stream_fps_;
   int stream_bitrate_kbps_;
   cv::VideoWriter stream_writer_;
+  bool stream_undistort_ = false;        // straighten ONLY the stream copy (detection stays on the raw image)
+  double stream_undistort_alpha_ = 1.0;  // 1 = keep the whole view (black curved borders), 0 = crop to valid pixels
+  cv::Mat stream_map1_, stream_map2_;    // undistortion maps, built once per frame size
+  cv::Size stream_map_size_;
   bool stream_writer_initialized_ = false;
   std::chrono::steady_clock::time_point last_stream_write_{};  // send at most stream_fps frames/s
 

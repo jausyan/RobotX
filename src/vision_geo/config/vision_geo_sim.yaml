@@ -10,6 +10,7 @@ vision_geo_node:
     model_path: "/home/el-system/robotX/models/buoys_1.onnx"
     input_width: 320
     input_height: 320
+    letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)
     conf_threshold: 0.4
     nms_threshold: 0.45
     # OpenVINO (same as vision_video). false = OpenCV DNN
@@ -47,6 +48,8 @@ vision_geo_node:
     stream_height: 480
     stream_fps: 30
     stream_bitrate_kbps: 500
+    stream_undistort: false         # straighten ONLY the stream (detection/GPS keep the raw image)
+    stream_undistort_alpha: 1.0     # 1.0 = whole view (black curved borders), 0.0 = crop to clean rectangle
     # mission order + per-class topics
     order_topic: "/mission/order"         # vision starts on the first "UAV-GO..." message
     wait_for_order: true                  # false = start detecting immediately (bench testing)

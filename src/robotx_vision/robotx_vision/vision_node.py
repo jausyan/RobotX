@@ -160,9 +160,9 @@ class RobotxVisionNode(Node):
         d('input_source', '/dev/video0')          # device path, video file or Image topic
         d('frame_id', 'camera')
         # models (one ONNX per phase; class lists optional if names are embedded)
-        d('task1_model_path', '')
+        d('task1_model_path', '/home/robotx/RobotX/models/b1.onnx')
         d('task2_model_path', '')
-        d('task1_classes', [''])                  # [''] = read from ONNX metadata
+        d('task1_classes', ['/home/robotx/RobotX/src/robotx_vision/config/robotx_vision.yaml'])                  # [''] = read from ONNX metadata
         d('task2_classes', [''])
         d('input_width', 320)
         d('input_height', 320)

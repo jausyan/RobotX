@@ -1,0 +1,46 @@
+vision_video_node:
+  ros__parameters:
+    input_mode: "device"
+    input_source: "/dev/video0"
+    model_path: "/home/robotx/RobotX/models/payload_krti_320.onnx"
+    input_width: 320
+    input_height: 320
+    letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)
+    # camera device mode — C922: 1280x720 MJPG 30 fps = full sensor width (default 640x480 crops the sides)
+    camera_width: 1280
+    camera_height: 720
+    camera_fourcc: "MJPG"
+    camera_fps: 30
+    # camera_matrix / distortion_coeffs below must match THIS mode -> run script/calibrate_camera.py
+    conf_threshold: 0.4
+    nms_threshold: 0.45
+    use_camera_info: false
+    camera_info_topic: "/iris_with_camera_2/camera/camera_info"
+    camera_matrix: [974.72932411, 0.0, 578.08656335,
+                    0.0, 977.84381247, 390.71472208,
+                    0.0, 0.0, 1.0]
+    distortion_coeffs: [0.07659126, -0.28776220, -0.00046609, -0.00756431, 0.30377170]
+    object_width_m: 0.3
+    object_height_m: 0.3
+    pose_frame_id: "camera"
+    show_window: false
+    window_name: "vision_video_detection"
+    enable_stream: true
+    stream_host: "192.168.0.180"
+    stream_port: 5000
+    stream_width: 1280 #848
+    stream_height: 720 #480
+    stream_fps: 15
+    stream_bitrate_kbps: 2000
+    stream_undistort: true         # straighten ONLY the stream (detection/GPS keep the raw image)
+    stream_undistort_alpha: 1.0     # 1.0 = whole view (black curved borders), 0.0 = crop to clean rectangle
+    use_openvino: true
+    openvino_device: "NPU"
+    openvino_model_path: ""
+
+
+    # Logitech
+    # camera_matrix: [974.72932411, 0.0, 578.08656335,
+    #                 0.0, 977.84381247, 390.71472208,
+    #                 0.0, 0.0, 1.0]
+    # distortion_coeffs: [0.07659126, -0.28776220, -0.00046609, -0.00756431, 0.30377170]
