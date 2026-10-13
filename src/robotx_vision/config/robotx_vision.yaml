@@ -47,6 +47,9 @@ robotx_vision_node:
     # Mission I/O (must match the C++ control node)
     order_topic: "/mission/order"               # communication.order_topic
     target_topic_prefix: "/vision_geo/target/"  # vision.target_topic_prefix
+    map_topic_prefix: "/vision_geo/map/"        # mission 1: buoy_red/green/entry/exit/off
+    map_frame_id: "map"
+    min_obs_to_commit: 5
     start_mission: 1
     mapping_time_s: 60.0                        # keep equal to mission.survey_time
     dist_tol_m: 3.0

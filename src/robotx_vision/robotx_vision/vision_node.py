@@ -11,17 +11,21 @@ Video out: annotated frames over GStreamer (H.264/RTP/UDP) to stream_host:stream
            plus an optional local window. The stream runs from launch, mission or not.
 
 Data out, driven by String messages on the order topic (/mission/order):
-  UAV-GO #1 -> MISSION 1: task1 model, map lights (incl. blinking), publish one
-               DetectedObjectArray per class; after `mapping_time_s` publish
-               "MISSION-DONE" on the order topic and go idle.
+  UAV-GO #1 -> MISSION 1: task1 model, map lights (incl. blinking) and publish the
+               map on <map_topic_prefix>buoy_{red,green,entry,exit,off}
+               (DetectedObjectArray, ENU metres from home, like vision_geo);
+               after `mapping_time_s` publish "MISSION-DONE" on the order topic
+               and go idle.
   UAV-GO #2 -> MISSION 2: task2 model, publish circle_* / tin_* / green_light
   UAV-GO #3 -> MISSION 3: same as 2
 Nothing is published on the target topics while idle. Detections are still drawn on
 the stream while idle (using the next mission's model) unless infer_when_idle=false.
 
-Targets go to <target_topic_prefix><name>, e.g. /vision_geo/target/circle_red.
-`altitude_m` = drone height above the target plane used for the projection;
-north/east_offset_m = metres from the drone to the object.
+Targets (missions 2/3) go to <target_topic_prefix><name>, e.g.
+/vision_geo/target/circle_red. `altitude_m` = drone height above the target plane
+used for the projection; north/east_offset_m = metres from the drone to the object.
+Map objects (mission 1): north/east_offset_m = metres from the home point (first GPS
+fix), altitude_m = 0, class_id = buoy id.
 """
 import math
 import os
@@ -44,7 +48,7 @@ from .utils.detector import Detector, read_onnx_names
 from .utils.geo import (body_to_ne, latlon_to_offset, norm_label,
                         normalized_to_body, offset_to_latlon, parse_order,
                         topic_suffix)
-from .utils.light_mapper import BLINK, LightMapper
+from .utils.light_mapper import BLINK, BUOY_STATES, LightMapper, buoy_state
 
 Pose = namedtuple('Pose', 'lat lon agl heading')
 GREEN, RED, YELLOW = (0, 255, 0), (0, 0, 255), (0, 255, 255)
@@ -82,6 +86,8 @@ class RobotxVisionNode(Node):
         self.only_ordered = bool(g('only_publish_ordered'))
         self.active_timeout = float(g('active_timeout_s'))
         self.prefix = g('target_topic_prefix').rstrip('/') + '/'
+        self.map_prefix = g('map_topic_prefix').rstrip('/') + '/'
+        self.map_frame_id = g('map_frame_id')
 
         # ---- stream / window ---------------------------------------------------
         self.show_window = bool(g('show_window'))
@@ -95,11 +101,11 @@ class RobotxVisionNode(Node):
         # ---- models ----------------------------------------------------------
         self.det1, self.names1 = self._make_detector('task1')
         self.det2, self.names2 = self._make_detector('task2')
-        self.blink_id = self.names1.index(BLINK) if BLINK in self.names1 else -1
         self.mapper = LightMapper(
             self.get_logger(),
             dist_tol_m=float(g('dist_tol_m')), dedup_tol_m=float(g('dedup_tol_m')),
-            blink_min_s=float(g('blink_min_s')), blink_max_s=float(g('blink_max_s')))
+            blink_min_s=float(g('blink_min_s')), blink_max_s=float(g('blink_max_s')),
+            min_obs=int(g('min_obs_to_commit')))
 
         # ---- state -------------------------------------------------------------
         self.next_mission = int(g('start_mission'))   # started by the next UAV-GO
@@ -108,15 +114,18 @@ class RobotxVisionNode(Node):
         self.order = (None, None)                      # (tin, circle)
         self.last_meta = None
         self.lat = self.lon = self.rel_alt = self.hdg = None
+        self.home = None                               # (lat, lon) of the first GPS fix
         self.t_gps = self.t_alt = self.t_hdg = 0.0
         self.cap, self.using_camera = None, False
         self.fps, self._frames, self._fps_t0 = 0.0, 0, time.monotonic()
 
         # ---- publishers (created up-front so DDS discovery is done in time) -------
         self.pubs = {}
-        labels = {topic_suffix(n) for n in self.names1 + self.names2} | {BLINK}
-        for s in sorted(labels):
+        for s in sorted({topic_suffix(n) for n in self.names2}):
             self._get_pub(s)
+        self.map_pubs = {s: self.create_publisher(DetectedObjectArray,
+                                                  f'{self.map_prefix}buoy_{s}', 10)
+                         for s in BUOY_STATES}
         self.order_pub = self.create_publisher(String, g('order_topic'), 10)
 
         # ---- drone state subscriptions -----------------------------------------
@@ -193,6 +202,9 @@ class RobotxVisionNode(Node):
         # mission I/O
         d('order_topic', '/mission/order')                          # communication.order_topic
         d('target_topic_prefix', '/vision_geo/target/')             # vision.target_topic_prefix
+        d('map_topic_prefix', '/vision_geo/map/')                   # mission 1 buoy map
+        d('map_frame_id', 'map')
+        d('min_obs_to_commit', 5)                                   # sightings before a buoy is reported
         d('start_mission', 1)                                       # mission the next UAV-GO starts
         d('mapping_time_s', 60.0)                                   # keep == mission.survey_time
         d('dist_tol_m', 3.0)
@@ -289,6 +301,9 @@ class RobotxVisionNode(Node):
             return
         if math.isfinite(msg.latitude) and math.isfinite(msg.longitude):
             self.lat, self.lon, self.t_gps = msg.latitude, msg.longitude, self._now()
+            if self.home is None:
+                self.home = (msg.latitude, msg.longitude)
+                self.get_logger().info(f'Home set: lat={self.home[0]:.6f} lon={self.home[1]:.6f}')
 
     def alt_cb(self, msg):
         if math.isfinite(msg.data):
@@ -486,19 +501,22 @@ class RobotxVisionNode(Node):
         return [(final.get(id(d), d['label']), d) for d in dets]
 
     def _publish_map(self, meta=None):
+        """Publish the buoy map: one array per state, offsets in metres from home."""
         meta = meta or self.last_meta
-        if meta is None:
+        if meta is None or self.home is None:
             return
-        stamp, frame_id, pose = meta
+        stamp = meta[0]
+        by_state = {s: [] for s in BUOY_STATES}
         for label, targets in self.mapper.snapshot().items():
-            arr = self._array(stamp, frame_id)
+            by_state[buoy_state(label)].extend(targets)
+        for state, targets in by_state.items():
+            arr = self._array(stamp, self.map_frame_id)
             for t in targets:
-                north, east = latlon_to_offset(pose.lat, pose.lon, t['lat'], t['lon'])
-                cid = self.blink_id if label == BLINK else t['class_id']
-                arr.objects.append(self._obj(stamp, frame_id, label, cid, t['conf'],
-                                             t['u'], t['v'], t['lat'], t['lon'],
-                                             pose.agl, north, east))
-            self._get_pub(label).publish(arr)
+                north, east = latlon_to_offset(self.home[0], self.home[1], t['lat'], t['lon'])
+                arr.objects.append(self._obj(stamp, self.map_frame_id, f'buoy_{state}',
+                                             t['id'], t['best_conf'], 0.0, 0.0,
+                                             t['lat'], t['lon'], 0.0, north, east))
+            self.map_pubs[state].publish(arr)
 
     # ---- missions 2 & 3: circles / tins ------------------------------------------------
     def _mission23(self, dets, meta):
