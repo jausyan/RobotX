@@ -1,10 +1,10 @@
 vision_video_node:
   ros__parameters:
-    input_mode: "file"
-    input_source: "/home/robotx/openvino_ws/drone_guidance/video/1.mp4"
-    model_path: "/home/robotx/RobotX/models/best_path_2.onnx"
-    input_width: 320
-    input_height: 320
+    input_mode: "device"
+    input_source: "/dev/video2"
+    model_path: "/home/robotx/RobotX/models/T1.onnx"
+    input_width: 640
+    input_height: 640
     letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)
     # camera device mode — C922: 1280x720 MJPG 30 fps = full sensor width (default 640x480 crops the sides)
     camera_width: 640 #1280
@@ -24,13 +24,15 @@ vision_video_node:
                     0.0, 506.13168687, 243.99035432,
                     0.0, 0.0, 1.0]
     distortion_coeffs: [0.07771398, -0.18711237, -0.00182709, 0.00026326, -0.06212367]
+    # class_names:   ["buoy_red", "buoy_blue", "circle_blue", "buoy_green", "circle_green", "buoy_black", "circle_red"]
+    class_names: ['blue-light', 'green-light', 'grey-light', 'red-light']
     object_width_m: 0.3
     object_height_m: 0.3
     pose_frame_id: "camera"
     show_window: false
     window_name: "vision_video_detection"
     enable_stream: true
-    stream_host: "192.168.0.115"
+    stream_host: "10.7.101.218"
     stream_port: 5000
     stream_width: 640 #1280 #848
     stream_height: 480 #720 #480

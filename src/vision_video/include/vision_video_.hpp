@@ -40,6 +40,28 @@ public:
     cv::Rect box;
   };
 
+
+  struct VideoTrack {
+    int track_id;
+    float cx;
+    float cy;
+    int frames_missing;
+    std::deque<std::pair<rclcpp::Time, std::string>> light_hist;
+    std::string state;
+    std::string prev_color;
+    rclcpp::Time prev_time;
+    rclcpp::Time current_color_start;
+  };
+
+  std::vector<std::string> class_names_;
+  std::vector<VideoTrack> active_tracks_;
+  int next_track_id_ = 0;
+
+  std::string lightColor(int class_id) const;
+  void updateTracks(const std::vector<Detection>& dets, const rclcpp::Time & stamp, std::vector<std::string>& out_labels);
+  void updateTrackState(VideoTrack & t, const rclcpp::Time & stamp);
+
+
 private:
   static bool startsWith(const std::string & value, const std::string & prefix);
 
@@ -60,12 +82,15 @@ private:
 
   void openInputSource();
   void updateFps();
-  void drawDetections(cv::Mat & frame, const std::vector<Detection> & detections) const;
+  // void drawDetections(cv::Mat & frame, const std::vector<Detection> & detections) const;
   void drawCrosshair(cv::Mat & frame) const;
-  void displayFrame(cv::Mat & frame, const std::vector<Detection> & detections);
+  // void displayFrame(cv::Mat & frame, const std::vector<Detection> & detections);
   bool ensureStreamWriter();
   void undistortForStream(cv::Mat & img);
-  void streamFrame(const cv::Mat & frame, const std::vector<Detection> & detections);
+  // void streamFrame(const cv::Mat & frame, const std::vector<Detection> & detections);
+  void displayFrame(cv::Mat & frame, const std::vector<Detection> & detections, const std::vector<std::string> & labels);
+  void streamFrame(const cv::Mat & frame, const std::vector<Detection> & detections, const std::vector<std::string> & labels);
+  void drawDetections(cv::Mat & frame, const std::vector<Detection> & detections, const std::vector<std::string> & labels) const;
 
   void processFrame();
   std::vector<Detection> infer(const cv::Mat & frame);
@@ -120,6 +145,10 @@ private:
   cv::Mat stream_map1_, stream_map2_;    // undistortion maps, built once per frame size
   cv::Size stream_map_size_;
   std::chrono::steady_clock::time_point last_stream_write_{};  // send at most stream_fps frames/s
+  // --- ADD THESE TWO LINES FOR VIDEO THROTTLING ---
+  std::chrono::steady_clock::time_point last_file_read_time_;
+  double file_playback_fps_ = 30.0;
+  // ---------------
   bool stream_writer_initialized_ = false;
 #if defined(ENABLE_OPENVINO_RUNTIME)
   ov_core_t * openvino_core_ = nullptr;

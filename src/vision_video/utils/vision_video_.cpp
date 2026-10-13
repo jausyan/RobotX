@@ -37,6 +37,7 @@ VisionVideoNode::VisionVideoNode()
   object_width_m_ = declare_parameter<double>("object_width_m", 0.3);
   object_height_m_ = declare_parameter<double>("object_height_m", 0.3);
   pose_frame_id_ = declare_parameter<std::string>("pose_frame_id", "camera");
+  class_names_ = declare_parameter<std::vector<std::string>>("class_names", std::vector<std::string>{"object"});
 
   if (use_camera_info_) {
     camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
@@ -194,7 +195,6 @@ void VisionVideoNode::openInputSource()
     throw std::runtime_error("failed to open input source: " + input_source_);
   }
 
-  // camera mode: FOURCC first (MJPG is needed for 720p/1080p at 30 fps), then size and fps
   if (using_camera_device_) {
     if (camera_fourcc_.size() == 4) {
       capture_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc(
@@ -218,6 +218,15 @@ void VisionVideoNode::openInputSource()
 
   const char * mode = using_camera_device_ ? "camera device" : "video file";
   RCLCPP_INFO(get_logger(), "Using %s input: %s", mode, input_source_.c_str());
+
+  // --- ADD THIS BLOCK TO THE VERY END OF THE FUNCTION ---
+  if (!using_camera_device_ && input_mode_ != "topic") {
+    file_playback_fps_ = capture_.get(cv::CAP_PROP_FPS);
+    if (file_playback_fps_ <= 0.0) file_playback_fps_ = 30.0; // Fallback to 30 FPS
+    last_file_read_time_ = std::chrono::steady_clock::now();
+    RCLCPP_INFO(get_logger(), "Video file playback locked to %.2f FPS to match real-time.", file_playback_fps_);
+  }
+  // ------------------------------------------------------
 }
 
 // ── OpenVINO ───────────────────────────────────────────────────────────────────
@@ -327,6 +336,159 @@ void VisionVideoNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr msg
   processFrame();
 }
 
+// ── Temporal Tracking & Blinking Logic ──────────────────────────────────────────
+
+std::string VisionVideoNode::lightColor(int class_id) const
+{
+  if (class_id < 0 || class_id >= static_cast<int>(class_names_.size())) return "off";
+  const std::string & name = class_names_[static_cast<size_t>(class_id)];
+  for (const std::string color : {"red", "green", "blue", "black"}) {
+    if (name.find(color) != std::string::npos) return color;
+  }
+  return "off";
+}
+
+void VisionVideoNode::updateTracks(const std::vector<Detection> & dets, const rclcpp::Time & stamp, std::vector<std::string>& out_labels)
+{
+  out_labels.resize(dets.size(), "unknown");
+  std::vector<bool> det_matched(dets.size(), false);
+  std::vector<bool> trk_matched(active_tracks_.size(), false);
+  
+  // 1. Match current detections to active tracks
+  for (size_t ti = 0; ti < active_tracks_.size(); ++ti) {
+    float best_dist = 100.0f; // 100 pixel match tolerance
+    int best_di = -1;
+    for (size_t di = 0; di < dets.size(); ++di) {
+      if (det_matched[di]) continue;
+      float dcx = dets[di].box.x + dets[di].box.width * 0.5f;
+      float dcy = dets[di].box.y + dets[di].box.height * 0.5f;
+      float dx = dcx - active_tracks_[ti].cx;
+      float dy = dcy - active_tracks_[ti].cy;
+      float dist = std::sqrt(dx*dx + dy*dy);
+      
+      if (dist < best_dist) {
+        best_dist = dist;
+        best_di = di;
+      }
+    }
+    
+    if (best_di >= 0) {
+      trk_matched[ti] = true;
+      det_matched[best_di] = true;
+      
+      auto & t = active_tracks_[ti];
+      t.cx = dets[best_di].box.x + dets[best_di].box.width * 0.5f;
+      t.cy = dets[best_di].box.y + dets[best_di].box.height * 0.5f;
+      t.frames_missing = 0;
+      t.light_hist.emplace_back(stamp, lightColor(dets[best_di].class_id));
+      
+      updateTrackState(t, stamp);
+      out_labels[best_di] = t.state;
+    }
+  }
+  
+  // 2. Age out old unmatched tracks
+  std::vector<VideoTrack> still_active;
+  for (size_t ti = 0; ti < active_tracks_.size(); ++ti) {
+    auto & t = active_tracks_[ti];
+    if (trk_matched[ti]) {
+      still_active.push_back(t);
+    } else {
+      t.frames_missing++;
+      if (t.frames_missing < 10) { // Keep alive for 10 frames if occluded
+        still_active.push_back(t);
+      }
+    }
+  }
+  active_tracks_ = still_active;
+  
+  // 3. Create tracks for entirely new detections
+  for (size_t di = 0; di < dets.size(); ++di) {
+    if (!det_matched[di]) {
+      VideoTrack t;
+      t.track_id = next_track_id_++;
+      t.cx = dets[di].box.x + dets[di].box.width * 0.5f;
+      t.cy = dets[di].box.y + dets[di].box.height * 0.5f;
+      t.frames_missing = 0;
+      t.state = "unknown";
+      t.prev_time = stamp;
+      t.current_color_start = stamp;
+      t.light_hist.emplace_back(stamp, lightColor(dets[di].class_id));
+      
+      updateTrackState(t, stamp);
+      active_tracks_.push_back(t);
+      out_labels[di] = t.state;
+    }
+  }
+}
+
+void VisionVideoNode::updateTrackState(VideoTrack & t, const rclcpp::Time & stamp)
+{
+  const double state_window_s = 6.0;
+  const rclcpp::Time window_start = stamp - rclcpp::Duration::from_seconds(state_window_s);
+  
+  while (!t.light_hist.empty() && t.light_hist.front().first < window_start) {
+    t.light_hist.pop_front();
+  }
+  if (t.light_hist.empty()) return;
+
+  bool flashing = (t.state == "blinking"); // Stickiness once detected
+  
+  std::string prev_color = "";
+  rclcpp::Time prev_time = window_start;
+  rclcpp::Time current_color_start = window_start;
+
+  for (const auto & [ts, color] : t.light_hist) {
+    if (color == "off") continue; 
+    
+    if (prev_color.empty()) {
+      prev_color = color;
+      current_color_start = ts;
+      prev_time = ts;
+      continue;
+    }
+
+    const double gap = (ts - prev_time).seconds();
+    const double stable_duration = (ts - current_color_start).seconds();
+
+    // RULE 1: Gap rule (buoy off but not detected as black_buoy)
+    if (prev_color == "blue" && color == "blue") {
+      if (gap >= 0.7 && gap <= 1.3) {
+        if (!flashing) {
+          flashing = true;
+          RCLCPP_INFO(get_logger(), "[CEK BLINK] Blue gap: %.2fs -> BLINKING TERKONFIRMASI!", gap);
+        }
+      }
+    }
+
+    // RULE 2: Transition rule (blue <-> black)
+    if (prev_color != color) {
+      bool is_blue_to_black = (prev_color == "blue" && color == "black");
+      bool is_black_to_blue = (prev_color == "black" && color == "blue");
+      
+      if (is_blue_to_black || is_black_to_blue) {
+        if (stable_duration >= 0.3 && stable_duration <= 3.0) {
+          if (!flashing) {
+            flashing = true;
+            RCLCPP_INFO(get_logger(), "[CEK BLINK] %s -> %s | Waktu Stabil: %.2fs -> BLINKING TERKONFIRMASI!", 
+                        prev_color.c_str(), color.c_str(), stable_duration);
+          }
+        }
+      }
+      prev_color = color;
+      current_color_start = ts;
+    }
+    
+    prev_time = ts;
+  }
+
+  if (flashing) {
+    t.state = "blinking";
+  } else if (!t.light_hist.empty()) {
+    t.state = t.light_hist.back().second;
+  }
+}
+
 // ── Pose estimation ────────────────────────────────────────────────────────────
 
 bool VisionVideoNode::estimatePose(const Detection & det, cv::Mat & rvec, cv::Mat & tvec) const
@@ -423,24 +585,37 @@ void VisionVideoNode::updateFps()
   }
 }
 
-void VisionVideoNode::drawDetections(cv::Mat & frame, const std::vector<Detection> & detections) const
+void VisionVideoNode::drawDetections(
+  cv::Mat & frame, const std::vector<Detection> & detections, const std::vector<std::string> & labels) const
 {
-  for (const auto & det : detections) {
-    cv::rectangle(frame, det.box, cv::Scalar(0, 255, 0), 2);
-    const std::string label =
-      cv::format("class=%d conf=%.2f", det.class_id, static_cast<double>(det.confidence));
+  for (size_t i = 0; i < detections.size(); ++i) {
+    const auto & det = detections[i];
+    bool is_blinking = (labels[i] == "blinking");
+    
+    cv::Scalar color = is_blinking ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0); // Red if blinking
+    cv::rectangle(frame, det.box, color, is_blinking ? 3 : 2);
+
+    const std::string name = (det.class_id >= 0 && det.class_id < static_cast<int>(class_names_.size()))
+                             ? class_names_[static_cast<size_t>(det.class_id)]
+                             : cv::format("class=%d", det.class_id);
+    
+    std::string label_text = cv::format("%s", name.c_str());
+    if (is_blinking) label_text = "BLINKING-LIGHT";
+    label_text += cv::format(" [%.2f]", static_cast<double>(det.confidence));
+
     int baseline = 0;
-    const cv::Size text_size =
-      cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+    const cv::Size text_size = cv::getTextSize(label_text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
     const int top = std::max(det.box.y, text_size.height + 4);
+    
     cv::rectangle(
       frame,
       cv::Point(det.box.x, top - text_size.height - 4),
       cv::Point(det.box.x + text_size.width, top + baseline - 4),
-      cv::Scalar(0, 255, 0), cv::FILLED);
+      color, cv::FILLED);
+      
     cv::putText(
-      frame, label, cv::Point(det.box.x, top - 6),
-      cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+      frame, label_text, cv::Point(det.box.x, top - 6),
+      cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), is_blinking ? 2 : 1);
   }
 }
 
@@ -453,14 +628,12 @@ void VisionVideoNode::drawCrosshair(cv::Mat & frame) const
   cv::line(frame, cv::Point(center_x, 0), cv::Point(center_x, frame.rows), green, 1);
 }
 
-void VisionVideoNode::displayFrame(cv::Mat & frame, const std::vector<Detection> & detections)
+void VisionVideoNode::displayFrame(cv::Mat & frame, const std::vector<Detection> & detections, const std::vector<std::string> & labels)
 {
-  if (!show_window_) {
-    return;
-  }
+  if (!show_window_) return;
   try {
     drawCrosshair(frame);
-    drawDetections(frame, detections);
+    drawDetections(frame, detections, labels);
     cv::imshow(window_name_, frame);
     const int key = cv::waitKey(1);
     if (key == 'q' || key == 27) {
@@ -469,19 +642,14 @@ void VisionVideoNode::displayFrame(cv::Mat & frame, const std::vector<Detection>
     }
   } catch (const cv::Exception & e) {
     show_window_ = false;
-    RCLCPP_ERROR(get_logger(),
-      "Visualization failed at runtime, disabling display. Error: %s", e.what());
+    RCLCPP_ERROR(get_logger(), "Visualization failed at runtime, disabling display. Error: %s", e.what());
   }
 }
 
 bool VisionVideoNode::ensureStreamWriter()
 {
-  if (!enable_stream_) {
-    return false;
-  }
-  if (stream_writer_initialized_) {
-    return stream_writer_.isOpened();
-  }
+  if (!enable_stream_) return false;
+  if (stream_writer_initialized_) return stream_writer_.isOpened();
 
   stream_writer_initialized_ = true;
   std::ostringstream pipeline;
@@ -516,24 +684,20 @@ bool VisionVideoNode::ensureStreamWriter()
   return true;
 }
 
-void VisionVideoNode::streamFrame(const cv::Mat & frame, const std::vector<Detection> & detections)
+void VisionVideoNode::streamFrame(const cv::Mat & frame, const std::vector<Detection> & detections, const std::vector<std::string> & labels)
 {
-  if (!ensureStreamWriter()) {
-    return;
-  }
-  // send at most stream_fps frames per second (the stream is only for monitoring)
+  if (!ensureStreamWriter()) return;
   const auto t = std::chrono::steady_clock::now();
   if (t - last_stream_write_ < std::chrono::duration<double>(1.0 / std::max(1, stream_fps_))) {
     return;
   }
   last_stream_write_ = t;
-  // draw at the source size (boxes are in source pixels), then scale to the stream size
+  
   cv::Mat annotated = frame.clone();
-  drawDetections(annotated, detections);            // boxes first: they bend with the picture and stay on their objects
-  if (stream_undistort_) {
-    undistortForStream(annotated);
-  }
-  drawCrosshair(annotated);                 // after: stays straight
+  drawDetections(annotated, detections, labels);
+  if (stream_undistort_) undistortForStream(annotated);
+  drawCrosshair(annotated);
+  
   cv::Mat out;
   if (annotated.cols != stream_width_ || annotated.rows != stream_height_) {
     cv::resize(annotated, out, cv::Size(stream_width_, stream_height_));
@@ -550,22 +714,28 @@ void VisionVideoNode::processFrame()
   cv::Mat frame;
   if (input_mode_ == "topic") {
     std::lock_guard<std::mutex> lock(frame_mutex_);
-    if (!new_frame_ || latest_frame_.empty()) {
-      return;
-    }
+    if (!new_frame_ || latest_frame_.empty()) return;
     frame = latest_frame_.clone();
     new_frame_ = false;
   } else {
+    // --- ADD THIS THROTTLE CHECK ---
+    if (!using_camera_device_) {
+      auto t_now = std::chrono::steady_clock::now();
+      double dt = std::chrono::duration<double>(t_now - last_file_read_time_).count();
+      if (dt < (1.0 / file_playback_fps_)) {
+        return; // Wait until it's time for the next frame
+      }
+      last_file_read_time_ = t_now;
+    }
+    // -------------------------------
     if (!capture_.read(frame) || frame.empty()) {
       if (using_camera_device_) {
-        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
-          "Failed to read frame from camera: %s", input_source_.c_str());
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "Failed to read frame from camera: %s", input_source_.c_str());
         return;
       }
       capture_.set(cv::CAP_PROP_POS_FRAMES, 0);
       if (!capture_.read(frame) || frame.empty()) {
-        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
-          "Failed to read frame from video file: %s", input_source_.c_str());
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "Failed to read frame from video file: %s", input_source_.c_str());
         return;
       }
     }
@@ -573,22 +743,39 @@ void VisionVideoNode::processFrame()
 
   std::vector<Detection> detections = infer(frame);
   updateFps();
-  streamFrame(frame, detections);
-  displayFrame(frame, detections);
+  
+  // Track states to find blinking buoy
+  std::vector<std::string> track_labels;
+  updateTracks(detections, now(), track_labels);
+
+  streamFrame(frame, detections, track_labels);
+  displayFrame(frame, detections, track_labels);
 
   if (!detections.empty()) {
-    const Detection & best = *std::max_element(
-      detections.begin(), detections.end(),
-      [](const Detection & a, const Detection & b) { return a.confidence < b.confidence; });
+    
+    // Find best detection, forcefully prioritizing the blinking light
+    int best_idx = -1;
+    float best_score = -1.0f;
+    for (size_t i = 0; i < detections.size(); ++i) {
+      float score = detections[i].confidence;
+      if (track_labels[i] == "blinking") {
+        score += 1000.0f; // Boost heavily so payload drone targets the blinking light
+      }
+      if (score > best_score) {
+        best_score = score;
+        best_idx = static_cast<int>(i);
+      }
+    }
 
+    const Detection & best = detections[best_idx];
     publishLegacyPose(frame, best);
 
     cv::Mat rvec, tvec;
     if (estimatePose(best, rvec, tvec)) {
       publishPose(rvec, tvec);
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 250,
-        "FPS=%.2f | %zu obj, best[class=%d conf=%.2f] pose(x=%.3f y=%.3f z=%.3f) m",
-        fps_, detections.size(), best.class_id, best.confidence,
+        "FPS=%.2f | %zu obj, best[%s conf=%.2f] pose(x=%.3f y=%.3f z=%.3f) m",
+        fps_, detections.size(), track_labels[best_idx].c_str(), best.confidence,
         tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
     } else {
       publishLostPose();

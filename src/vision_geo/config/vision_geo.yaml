@@ -1,7 +1,7 @@
 vision_geo_node:
   ros__parameters:
-    input_mode: "topic"          # "device" | "topic"
-    input_source: "/camera/image"
+    input_mode: "device"          # "device" | "topic"
+    input_source: "/dev/video2"
     use_camera_info: false
     camera_info_topic: "/iris_with_camera_2/camera/camera_info"
     camera_matrix: [504.99132615, 0.0, 318.4012728,
