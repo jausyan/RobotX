@@ -1,8 +1,8 @@
 vision_video_node:
   ros__parameters:
-    input_mode: "device"
-    input_source: "/dev/video2"
-    model_path: "/home/robotx/RobotX/models/b1.onnx"
+    input_mode: "file"
+    input_source: "/home/robotx/openvino_ws/drone_guidance/video/1.mp4"
+    model_path: "/home/robotx/RobotX/models/best_path_2.onnx"
     input_width: 320
     input_height: 320
     letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)

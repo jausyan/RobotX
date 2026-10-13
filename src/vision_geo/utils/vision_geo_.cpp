@@ -1185,7 +1185,7 @@ std::string VisionGeoNode::lightColor(int class_id) const
 {
   if (class_id < 0 || class_id >= static_cast<int>(class_names_.size())) return "off";
   const std::string & name = class_names_[static_cast<size_t>(class_id)];
-  for (const std::string color : {"red", "green", "blue"}) {
+  for (const std::string color : {"red", "green", "blue", "black"}) {
     if (name.find(color) != std::string::npos) return color;
   }
   return "off";
@@ -1211,48 +1211,108 @@ void VisionGeoNode::updateBuoyState(BuoyMapPoint & pt, const rclcpp::Time & stam
   }
   if (pt.light_hist.empty()) return;
 
-  std::map<std::string, int> lit_count;
-  rclcpp::Time first_lit = stamp, last_lit = window_start, prev_lit = window_start;
-  bool have_lit = false, flashing = false;
+  std::map<std::string, int> color_count;
+  bool flashing = false;
+  
+  std::string prev_color = "";
+  rclcpp::Time prev_time = window_start;
+  rclcpp::Time current_color_start = window_start;
+
   for (const auto & [ts, color] : pt.light_hist) {
-    if (color == "off") continue;
-    lit_count[color]++;
-    if (have_lit) {
-      const double gap = (ts - prev_lit).seconds();
-      if (gap >= flash_gap_min_s_ && gap <= flash_gap_max_s_) flashing = true;
-    } else {
-      first_lit = ts;
+    if (color == "off") continue; 
+    
+    color_count[color]++;
+    
+    if (prev_color.empty()) {
+      prev_color = color;
+      current_color_start = ts;
+      prev_time = ts;
+      continue;
     }
-    prev_lit = last_lit = ts;
-    have_lit = true;
+
+    const double gap = (ts - prev_time).seconds();
+    const double stable_duration = (ts - current_color_start).seconds();
+
+    // RULE 1: Gap Rule (Deactivated buoy wasn't detected as black_buoy)
+    // If it was blue, disappeared completely for 0.7 - 1.3s, and came back as blue
+    if (prev_color == "blue" && color == "blue") {
+      if (gap >= 0.7 && gap <= 1.3) {
+        flashing = true;
+        RCLCPP_INFO(get_logger(), "[CEK BLINK] Blue gap: %.2fs -> BLINKING TERKONFIRMASI!", gap);
+      }
+    }
+
+    // RULE 2: Explicit Transition Rule (task1.py memory tracking)
+    // Transisi antara blue <-> black (grey-light di python)
+    if (prev_color != color) {
+      bool is_blue_to_black = (prev_color == "blue" && color == "black");
+      bool is_black_to_blue = (prev_color == "black" && color == "blue");
+      
+      if (is_blue_to_black || is_black_to_blue) {
+        RCLCPP_INFO(get_logger(), "[CEK BLINK] %s -> %s | Waktu Stabil: %.2fs", 
+                    prev_color.c_str(), color.c_str(), stable_duration);
+                    
+        if (stable_duration >= 0.3 && stable_duration <= 3.0) {
+          flashing = true;
+          RCLCPP_INFO(get_logger(), ">>> BLINKING LIGHT TERKONFIRMASI! <<<");
+        } else {
+          RCLCPP_WARN(get_logger(), "Transisi ditolak: Waktu terlalu cepat/lama (%.2fs)", stable_duration);
+        }
+      }
+      
+      // Reset tracker start time for the new color
+      prev_color = color;
+      current_color_start = ts;
+    }
+    
+    prev_time = ts;
   }
-  if (have_lit) {
-    for (const auto & [ts, color] : pt.light_hist) {
-      if (color == "off" && ts > first_lit && ts < last_lit) { flashing = true; break; }
+
+  // Determine the primary lit color (ignoring black/off)
+  std::string dominant_lit_color;
+  int max_count = 0;
+  for (const auto & [c, n] : color_count) {
+    if (c != "black" && c != "off" && n > max_count) {
+      max_count = n;
+      dominant_lit_color = c;
     }
   }
 
   std::string new_state = pt.state;
-  if (!have_lit) {
+
+  if (max_count == 0) {
+    // Only saw black or off in the whole window
     const double off_span = (pt.light_hist.back().first - pt.light_hist.front().first).seconds();
-    if (off_span >= flash_gap_max_s_) new_state = "off";
-  } else {
-    std::string color;
-    int best = 0;
-    for (const auto & [c, n] : lit_count) {
-      if (n > best) { best = n; color = c; }
+    if (off_span >= solid_min_s_) {
+      new_state = "off";
     }
-    if (color != "blue") {
-      new_state = color;
-    } else if (flashing) {
-      new_state = "entry";
-    } else if ((last_lit - first_lit).seconds() >= solid_min_s_) {
-      new_state = "exit";
+  } else {
+    if (dominant_lit_color != "blue") {
+      // Predominantly red or green
+      new_state = dominant_lit_color;
+    } else {
+      // Predominantly blue
+      if (flashing) {
+        new_state = "entry";
+      } else if (new_state != "entry") {
+        // Fallback to solid blue ("exit") if it's been active long enough without flashing
+        rclcpp::Time first_blue = stamp;
+        rclcpp::Time last_blue = window_start;
+        for (const auto & [ts, color] : pt.light_hist) {
+          if (color == "blue") {
+            if (ts < first_blue) first_blue = ts;
+            if (ts > last_blue) last_blue = ts;
+          }
+        }
+        if ((last_blue - first_blue).seconds() >= solid_min_s_) {
+          new_state = "exit";
+        }
+      }
     }
   }
 
   if (new_state != pt.state) {
-    RCLCPP_INFO(get_logger(), "[map] buoy#%d state %s → %s (lat=%.6f lon=%.6f)",
+    RCLCPP_INFO(get_logger(), "[map] buoy#%d state %s -> %s (lat=%.6f lon=%.6f)",
       pt.buoy_id, pt.state.c_str(), new_state.c_str(), pt.lat, pt.lon);
     pt.state = new_state;
   }
