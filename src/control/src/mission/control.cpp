@@ -218,68 +218,21 @@ int main(int argc, char **argv) {
     holdPosition(node, rate, posee, hold_time);
 
     // ============================== TASK 1 ======================================
-    if (use_task_1) {
-        setTask(node, TASK_SAFE_PASSAGE);
-        RCLCPP_INFO(node->get_logger(), "TASK 1: FLY TO SURVEY POINT");
-        clearMission(node);
-        pushMission(node, {create_waypoint(survey_lat[0], survey_lon[0], takeoff_altitude)});
-        setMode(node, rate, "AUTO");
-        waitForWP(node, rate, 1);
-        setMode(node, rate, "GUIDED");
-        holdPosition(node, rate, posee, 3.0);
-        pubCommand(node, "UAV-GO", order_topic);
-        // holdPosition(node, rate, posee, 60.0);
-        // holdPosition(node, rate, posee, 3.0);
-        // RCLCPP_INFO(node->get_logger(), "TASK 1: SURVEY ALT REACHED, STARTING VISION...");
-        // pubCommand(node, "UAV-GO", order_topic);
-        waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
-        // setTask(node, TASK_NONE);
-        // RCLCPP_INFO(node->get_logger(), "TASK 1: MAPPING DONE, GOING TO USV POSE...");
-        // // goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
-        // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, "/vision_geo/target/buoy_red");
-        // fix_alt(node, rate, posee, drop_alt);
-        // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, "/vision_geo/target/buoy_red");
-        // fix_alt(node, rate, posee, 3.0);
-        // if (centered) {
-        //     channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
-        //     //controlServoRepeated(node, channel, servo_tutup, signal_repeat);
-        //     holdPosition(node, rate, posee, hold_time);
-        // } else {
-        //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
-        // }
-        // clearMission(node);
-        // pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], takeoff_altitude)});
-        centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, "/vision_geo/target/circle_blue");
-        fix_alt(node, rate, posee, drop_alt);
-        centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, "/vision_geo/target/circle_blue");
-        if (centered) {
-            channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
-            controlServoRepeated(node, channel, servo_tutup, signal_repeat);
-            holdPosition(node, rate, posee, hold_time);
-        } else {
-            RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
-        }
-        // fix_alt(node, rate, posee, takeoff_altitude);
-
-        // setMode(node, rate, "rtl");
-        // waitCommand(node, "UAV-GO", "/mission/order", 300.0, true);
-        // takeoff(node, rate, posee, takeoff_altitude, false);
-        // clearMission(node);
-        // pushMission(node, {create_waypoint(survey_lat[0], survey_lon[0], takeoff_altitude)});
-        // setMode(node, rate, "AUTO");
-        // waitForWP(node, rate, 1);
-        // setMode(node, rate, "GUIDED");
-        // holdPosition(node, rate, posee, 5.0);
-        // fix_alt(node, rate, posee, survey_alt, 0.3, 60.0);
-        // holdPosition(node, rate, posee, 5.0);
-        setMode(node, rate, "land");
-        // waitForWP(node, rate, 1);
-        // setMode(node, rate, "GUIDED");
-        // holdPosition(node, rate, posee, 10.0);
-        setTask(node, TASK_NONE);
-    } else {
-        RCLCPP_WARN(node->get_logger(), "TASK 1: SKIPPED (mission.use_task_1 = false)");
-    }
+    TASK_1:
+    RCLCPP_INFO(node->get_logger(), "TASK 1: FLY TO SURVEY POINT");
+    clearMission(node);
+    pushMission(node, {create_waypoint(survey_lat, survey_lon, survey_alt)});
+    setMode(node, rate, "AUTO");
+    waitForWP(node, rate, 1);
+    setMode(node, rate, "GUIDED");
+    holdPosition(node, rate, posee, 1.0);
+    fix_alt(node, rate, posee, survey_alt, 0.3, 60.0);
+    holdPosition(node, rate, posee, 3.0);
+    RCLCPP_INFO(node->get_logger(), "TASK 1: SURVEY ALT REACHED, STARTING VISION...");
+    pubCommand(node, "UAV-GO", order_topic);
+    waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
+    RCLCPP_INFO(node->get_logger(), "TASK 1: MAPPING DONE, GOING TO USV POSE...");
+    goToVehicle(node, rate, posee, takeoff_altitude, usv_gps_topic);
 
     // ============================== TASK 2 ======================================
     if (use_task_2) {
