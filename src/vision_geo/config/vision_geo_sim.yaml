@@ -29,6 +29,7 @@ vision_geo_node:
     fixed_lon: 107.609810
     fixed_altitude_m: 15.0
     max_pose_age_ms: 500
+    altitude_offset_m: 0.0        # takeoff point height above the water [m] (e.g. 1.0 from a deck)
     output_topic:    "/vision_geo/detections"
     marker_topic:    "/vision_geo/markers"
     marker_frame_id: "map"
