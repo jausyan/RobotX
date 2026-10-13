@@ -34,7 +34,7 @@
       survey_time: 600.0            
 
       # Task 2 & 3: delivery
-      usv_alt: 20.0                
+      usv_alt: 20.0  #alt              
       approach_alt: 10.0           # first centering altitude above the circle
       drop_alt: 1.0               # final centering + drop altitude
 
