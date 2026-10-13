@@ -21,14 +21,11 @@
 *.onnx
 *.openvino
 *.bin
-bag/*
 CLAUDE.md
 .graphifyignore
 /script/calibrate_camera.py
 /script/camera_setup.sh
 /script/sharpness_test.py
-*.mcap
-rosbag2_*/
 
 # Python environment + caches (never commit: torch alone is > 400 MB)
 /.venv/
@@ -39,4 +36,3 @@ __pycache__/
 
 # trained weights (like *.onnx above)
 *.pt
-rosbag2_2026_10_13-19_19_18/
