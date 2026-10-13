@@ -57,9 +57,9 @@ public:
     double lat = 0.0;
     double lon = 0.0;
     double alt_agl = 0.0;
-    double x_local = 0.0;    // pose.position.x — North from home
-    double y_local = 0.0;    // pose.position.y — West from home (= -East; negate to get East)
-    double alt_local = 0.0;  // pose.position.z — Up from home
+    double x_local = 0.0;    // pose.position.x — East from the EKF origin (MAVROS ENU)
+    double y_local = 0.0;    // pose.position.y — North from the EKF origin
+    double alt_local = 0.0;  // pose.position.z — Up from the EKF origin
     double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
     rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
     bool gps_valid = false;
@@ -224,6 +224,7 @@ private:
   double fixed_lon_;
   double fixed_altitude_m_;
   int max_pose_age_ms_;
+  double altitude_offset_m_ = 0.0;   // takeoff point height above the water [m]
 
   std::string output_topic_;
   std::string marker_topic_;
