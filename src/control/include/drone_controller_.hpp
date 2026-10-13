@@ -131,6 +131,8 @@ public:
     rclcpp::Client<mavros_msgs::srv::ParamSetV2>::SharedFuture setParam_(const std::shared_ptr<mavros_msgs::srv::ParamSetV2::Request>& request);
     rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedFuture pushMission_(const std::shared_ptr<mavros_msgs::srv::WaypointPush::Request>& request);
     rclcpp::Client<mavros_msgs::srv::WaypointClear>::SharedFuture clearMission_(const std::shared_ptr<mavros_msgs::srv::WaypointClear::Request>& request);
+    rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedFuture pushGeofence_(const std::shared_ptr<mavros_msgs::srv::WaypointPush::Request>& request);
+    rclcpp::Client<mavros_msgs::srv::WaypointClear>::SharedFuture clearGeofence_(const std::shared_ptr<mavros_msgs::srv::WaypointClear::Request>& request);
 
     // Functions to publish messages
     void publishLocalPosition(const geometry_msgs::msg::PoseStamped &pose);
@@ -222,6 +224,8 @@ private:
     rclcpp::Client<mavros_msgs::srv::ParamSetV2>::SharedPtr    set_param_client;
     rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedPtr  push_mission_client;
     rclcpp::Client<mavros_msgs::srv::WaypointClear>::SharedPtr clear_mission_client;
+    rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedPtr  push_fence_client;    // MAVROS geofence plugin
+    rclcpp::Client<mavros_msgs::srv::WaypointClear>::SharedPtr clear_fence_client;
 
     rclcpp::Subscription<mavros_msgs::msg::State>::SharedPtr                        state_sub;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr                pose_sub;

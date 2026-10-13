@@ -328,6 +328,29 @@ void pushMission(const std::shared_ptr<DroneController>&node, std::vector<mavros
 
 void clearMission(const std::shared_ptr<DroneController>&node);
 
+    /**
+     * Push a polygon geofence (inclusion zone) to ArduPilot, like pushMission() but to the fence list.
+     * The drone may only fly INSIDE the polygon; what happens on a breach is FENCE_ACTION on the FC.
+     * Also sets FENCE_TYPE (4 = polygon, 5 = polygon + max altitude) and FENCE_ENABLE = 1.
+     *
+     * parameters:
+     * - lat, lon: polygon vertices in order (same index in both lists, at least 3).
+     *   A closed polygon (last vertex == first) is accepted, the duplicate is dropped.
+     * - fence_type: ArduPilot FENCE_TYPE bitmask to set (0 = leave the FC value).
+     * returns true when MAVROS confirms the upload.
+     */
+bool pushGeofence(const std::shared_ptr<DroneController>&node, const std::vector<double> &lat, const std::vector<double> &lon, int fence_type = 4);
+
+void clearGeofence(const std::shared_ptr<DroneController>&node);
+
+    /**
+     * Wait for the UAV geofence relayed by uav_bridge from /system/mission/course
+     * (std_msgs/Float64MultiArray [lat0, lon0, lat1, lon1, ...], transient_local, so a course
+     * sent before control started is still received).
+     * returns true and fills lat/lon when it arrives within timeout [s].
+     */
+bool waitGeofence(const std::shared_ptr<DroneController>&node, const std::string &topic, float timeout, std::vector<double> &lat, std::vector<double> &lon);
+
 void waitForWP(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, int seq);
 
 void arm(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate);

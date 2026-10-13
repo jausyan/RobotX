@@ -54,3 +54,9 @@ def test_field_changed():
     assert tr.field_changed(a, [(-35.0, 149.00001, 2)])            # ~0.9 m
     assert tr.field_changed(a, [(-35.0, 149.0, 1)])                # red -> off
     assert tr.field_changed(a, a + [(-35.1, 149.0, 3)])            # new buoy
+
+
+def test_geofence_flat():
+    from types import SimpleNamespace as P
+    pts = [P(latitude=-7.1, longitude=112.1), P(latitude=-7.2, longitude=112.2)]
+    assert tr.geofence_flat(pts) == [-7.1, 112.1, -7.2, 112.2]

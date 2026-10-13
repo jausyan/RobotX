@@ -7,6 +7,7 @@ uav_bridge:
       usv_gps: /USV/global_position/global     # internal: goToVehicle() (== communication.usv_gps_topic)
       buoy_map_prefix: /vision_geo/map/        # vision_geo / robotx_vision buoy_<state>
       mavros_ns: /rian                         # MAVROS namespace (same as control)
+      geofence: /mission/geofence              # Course.uav_geofence relayed to control (== communication.geofence_topic)
     system:                                    # team interface (rx_msgs), crosses the DDS Router
       command: /system/mission/command
       course: /system/mission/course

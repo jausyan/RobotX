@@ -35,6 +35,8 @@ DroneController::DroneController() : Node("drone_controller") {
     this->set_param_client = this->create_client<mavros_msgs::srv::ParamSetV2>("rian/param/set");
     this->push_mission_client = this->create_client<mavros_msgs::srv::WaypointPush>("rian/mission/push");
     this->clear_mission_client = this->create_client<mavros_msgs::srv::WaypointClear>("rian/mission/clear");
+    this->push_fence_client = this->create_client<mavros_msgs::srv::WaypointPush>("rian/geofence/push");
+    this->clear_fence_client = this->create_client<mavros_msgs::srv::WaypointClear>("rian/geofence/clear");
 
     rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
     auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -193,6 +195,8 @@ rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture DroneController::openCamera
 rclcpp::Client<mavros_msgs::srv::ParamSetV2>::SharedFuture DroneController::setParam_(const std::shared_ptr<mavros_msgs::srv::ParamSetV2::Request>& request)            {waitForSetParamService(); return this->set_param_client->async_send_request(request);}
 rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedFuture DroneController::pushMission_(const std::shared_ptr<mavros_msgs::srv::WaypointPush::Request>& request)     {waitForSetParamService(); return this->push_mission_client->async_send_request(request);}
 rclcpp::Client<mavros_msgs::srv::WaypointClear>::SharedFuture DroneController::clearMission_(const std::shared_ptr<mavros_msgs::srv::WaypointClear::Request>& request)  {waitForSetParamService(); return this->clear_mission_client->async_send_request(request);}
+rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedFuture DroneController::pushGeofence_(const std::shared_ptr<mavros_msgs::srv::WaypointPush::Request>& request)    {waitForService(this->push_fence_client); return this->push_fence_client->async_send_request(request);}
+rclcpp::Client<mavros_msgs::srv::WaypointClear>::SharedFuture DroneController::clearGeofence_(const std::shared_ptr<mavros_msgs::srv::WaypointClear::Request>& request) {waitForService(this->clear_fence_client); return this->clear_fence_client->async_send_request(request);}
 
 // Functions to publish messages
 void DroneController::publishLocalPosition(const geometry_msgs::msg::PoseStamped &pose) {this->local_pos_pub->publish(pose);}

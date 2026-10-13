@@ -23,6 +23,7 @@ else stays inside the UAV domain. This node translates between the two:
     /system/vehicle/uav/task{2,3}/delivery  rx_msgs/ResourceDelivery echo, when CMD_DELIVERY arrives
 """
 import math
+import time
 from collections import deque
 
 import rclpy
@@ -33,10 +34,12 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rx_msgs.msg import (Command, Course, Heartbeat, LatLng, MissionStatus,
                          ResourceDelivery, SafePassage, BuoyDetection)
 from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import Float64, String, UInt8
+from std_msgs.msg import Float64, Float64MultiArray, String, UInt8
 from vision_msgs.msg import DetectedObjectArray
 
 from . import translate as tr
+
+STATE_TIMEOUT_S = 3.0   # no MAVROS /state for this long -> state KILLED
 
 
 class UavBridge(Node):
@@ -49,6 +52,7 @@ class UavBridge(Node):
         d('topics.usv_gps', '/USV/global_position/global')
         d('topics.buoy_map_prefix', '/vision_geo/map/')
         d('topics.mavros_ns', '/rian')                  # MAVROS namespace (same as control)
+        d('topics.geofence', '/mission/geofence')       # Course.uav_geofence -> control pushGeofence()
         # /system/... topics (team interface)
         d('system.command', '/system/mission/command')
         d('system.course', '/system/mission/course')
@@ -83,11 +87,14 @@ class UavBridge(Node):
         self.last_field = None
         self.field_dirty = False
         self.last_status = None
+        self.last_state_time = 0.0
 
         # ---- publishers ---------------------------------------------------------
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.order_pub = self.create_publisher(String, g('topics.order'), 10)
         self.usv_gps_pub = self.create_publisher(NavSatFix, g('topics.usv_gps'), 10)
+        # latched: control may start after the GCS sent the course (it is sent once)
+        self.geofence_pub = self.create_publisher(Float64MultiArray, g('topics.geofence'), latched)
         self.hb_pub = self.create_publisher(Heartbeat, veh + '/heartbeat', 10)
         self.status_pub = self.create_publisher(MissionStatus, g('system.status'), 10)
         self.sp_pub = self.create_publisher(SafePassage, veh + '/task1/safe_passage', 10)
@@ -97,7 +104,9 @@ class UavBridge(Node):
 
         # ---- subscribers --------------------------------------------------------
         self.create_subscription(Command, g('system.command'), self.command_cb, 10)
-        self.create_subscription(Course, g('system.course'), self.course_cb, latched)
+        # VOLATILE: the GCS publishes the course VOLATILE; a TRANSIENT_LOCAL subscriber would be
+        # incompatible and receive nothing (a VOLATILE one matches both kinds of publisher)
+        self.create_subscription(Course, g('system.course'), self.course_cb, 10)
         self.create_subscription(Heartbeat, g('system.usv_heartbeat'), self.usv_cb, 10)
         self.create_subscription(String, g('topics.order'), self.order_cb, 10)
         self.create_subscription(UInt8, g('topics.current_task'), self.task_cb, latched)
@@ -194,6 +203,8 @@ class UavBridge(Node):
         self.get_logger().info(
             f'Course {msg.course_id}: boundary {len(msg.boundary)} pts, '
             f'UAV geofence {len(msg.uav_geofence)} pts')
+        if msg.uav_geofence:
+            self.geofence_pub.publish(Float64MultiArray(data=tr.geofence_flat(msg.uav_geofence)))
 
     def usv_cb(self, msg):
         fix = NavSatFix()
@@ -216,6 +227,11 @@ class UavBridge(Node):
 
     def state_cb(self, msg):
         self.mav.update(connected=msg.connected, armed=msg.armed, mode=msg.mode)
+        self.last_state_time = time.monotonic()
+
+    def mavros_alive(self):
+        # MAVROS sends /state about 1 Hz; silence means MAVROS (or the link to it) is gone -> KILLED
+        return self.mav['connected'] and time.monotonic() - self.last_state_time < STATE_TIMEOUT_S
 
     def fix_cb(self, msg):
         if math.isfinite(msg.latitude) and math.isfinite(msg.longitude):
@@ -239,7 +255,7 @@ class UavBridge(Node):
         m = self.mav
         hb = Heartbeat()
         hb.header.stamp = self.get_clock().now().to_msg()
-        hb.state = tr.robot_state(m['connected'], m['mode'])
+        hb.state = tr.robot_state(self.mavros_alive(), m['mode'])
         if m['fix'] is not None:
             hb.position = LatLng(latitude=m['fix'].latitude, longitude=m['fix'].longitude)
             hb.altitude_hae_m = float(m['fix'].altitude)   # MAVROS global fix altitude = ellipsoid
@@ -253,7 +269,7 @@ class UavBridge(Node):
         self.hb_pub.publish(hb)
 
     def publish_status(self, force=False):
-        state = tr.robot_state(self.mav['connected'], self.mav['mode'])
+        state = tr.robot_state(self.mavros_alive(), self.mav['mode'])
         key = (self.run_id, state, self.current_task)
         if not force and key == self.last_status:
             return
