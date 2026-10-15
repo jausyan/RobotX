@@ -1,7 +1,7 @@
 /**/mavros_node:
   ros__parameters:
     fcu_url: "/dev/serial/by-id/usb-ArduPilot_Pixhawk6X_2D004C001151323530363730-if00:115200"
-    gcs_url: "udp://@192.168.0.116:14550"
+    gcs_url: "udp://@192.168.0.115:14550"
     tgt_system: 1
     tgt_component: 1
     fcu_protocol: "v2.0"
@@ -21,6 +21,7 @@
       - setpoint_raw        # setpoint_raw/local (centering_red), setpoint_raw/global
       - setpoint_velocity   # setpoint_velocity/cmd_vel(_unstamped)
       - waypoint            # mission/push, mission/clear, mission/reached (AUTO legs)
+      - geofence            # geofence/push, geofence/clear (control pushGeofence)
       - param               # param/set
       - rangefinder         # rangefinder/rangefinder (control altitude)
       - distance_sensor     # rangefinder_pub (config below)

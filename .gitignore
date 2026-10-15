@@ -26,6 +26,8 @@ CLAUDE.md
 /script/calibrate_camera.py
 /script/camera_setup.sh
 /script/sharpness_test.py
+calib/*
+bag/*    
 
 # Python environment + caches (never commit: torch alone is > 400 MB)
 /.venv/
