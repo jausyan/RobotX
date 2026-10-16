@@ -342,6 +342,37 @@ to a circle on the **other** platform.
 | `state_window_s`, `flash_gap_min_s`, `flash_gap_max_s`, `solid_min_s` | flashing/solid detection |
 | `track_exit_frames` | keep above ~1 s of frames so a flashing light keeps its track |
 
+## COM TO TEST
+match with the [<u>team communication format</u>](https://github.com/Barunastra-ITS/rx-sos-communication-itsn.git). remember every command_seq always be added each topic sent
+
+RUN-START : start mission before takeoff
+
+```sh
+ros2 topic pub --once -w 1 /system/mission/command rx_msgs/msg/Command \
+  "{command_seq: 1, target_vehicle: 3, command_type: 1, run_id: 1}"
+```
+
+UAV-GO : start vision, tell UAV to continue to go 
+
+```sh
+ros2 topic pub --once -w 1 /system/mission/command rx_msgs/msg/Command \
+  "{command_seq: 2, target_vehicle: 3, command_type: 8}"
+```
+
+UAV-GO:GREEN:RED :  Delivery -> UAV-GO:<TIN>:<CIRCLE>   (here: red tin -> green circle, Task 2)
+
+```sh
+ros2 topic pub --once -w 1 /system/mission/command rx_msgs/msg/Command \
+  "{command_seq: 3, target_vehicle: 3, command_type: 2, task: 3, resource_color: 1, delivery_circle_color: 2}"
+```
+
+MISSION-DONE : finish the task
+
+```sh
+ros2 topic pub --once -w 1 /system/mission/command rx_msgs/msg/Command \
+  "{command_seq: 4, target_vehicle: 3, command_type: 9}"
+```
+
 ---
 
 ## Not done yet

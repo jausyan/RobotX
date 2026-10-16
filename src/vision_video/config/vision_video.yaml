@@ -5,13 +5,11 @@ vision_video_node:
     model_path: "/home/robotx/RobotX/models/b1.onnx"
     input_width: 320
     input_height: 320
-    letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)
-    # camera device mode — C922: 1280x720 MJPG 30 fps = full sensor width (default 640x480 crops the sides)
+    letterbox: true                
     camera_width: 640 #1280
     camera_height: 480 #720
     camera_fourcc: "MJPG"
     camera_fps: 30
-    # camera_matrix / distortion_coeffs below must match THIS mode -> run script/calibrate_camera.py
     conf_threshold: 0.4
     nms_threshold: 0.45
     use_camera_info: false
@@ -20,33 +18,29 @@ vision_video_node:
     #                 0.0, 2077.80783845, 235.75015154,
     #                 0.0, 0.0, 1.0]
     # distortion_coeffs: [-7.11619363, 85.46124509, -0.10799879, -0.10565513, -447.21970956]
-    camera_matrix: [474.11532157, 0.0, 278.72617083, 0.0, 477.53068670, 217.86543019, 0.0, 0.0, 1.0]
-    distortion_coeffs: [-0.38899220, 0.12470343, 0.00556211, 0.00572584, 0.00878730]
+    # camera_matrix: [474.11532157, 0.0, 278.72617083, 0.0, 477.53068670, 217.86543019, 0.0, 0.0, 1.0]
+    # distortion_coeffs: [-0.38899220, 0.12470343, 0.00556211, 0.00572584, 0.00878730]
     # camera_matrix: [504.99132615, 0.0, 318.4012728,
     #                 0.0, 506.13168687, 243.99035432,
     #                 0.0, 0.0, 1.0]
     # distortion_coeffs: [0.07771398, -0.18711237, -0.00182709, 0.00026326, -0.06212367]
+    camera_matrix: [612.23832801, 0.0, 292.50879046, 0.0, 612.89511564, 229.65043225, 0.0, 0.0, 1.0]
+    distortion_coeffs: [-0.49151925, 0.36591033, 0.00508743, 0.00177489, -0.26990208]
     object_width_m: 0.3
     object_height_m: 0.3
     pose_frame_id: "camera"
     show_window: false
     window_name: "vision_video_detection"
     enable_stream: true
-    stream_host: "10.7.101.66"
+    stream_host: "192.168.0.115"
     stream_port: 5000
     stream_width: 640 #1280 #848 
     stream_height: 480 #720 #480
     stream_fps: 15
     stream_bitrate_kbps: 2000
-    stream_undistort: false         # straighten ONLY the stream (detection/GPS keep the raw image)
-    stream_undistort_alpha: 0.0     # 1.0 = whole view (black curved borders), 0.0 = crop to clean rectangle
+    stream_undistort: false         
+    stream_undistort_alpha: 0.0     
     use_openvino: true
     openvino_device: "NPU"
     openvino_model_path: ""
 
-
-    # Logitech
-    # camera_matrix: [974.72932411, 0.0, 578.08656335,
-    #                 0.0, 977.84381247, 390.71472208,
-    #                 0.0, 0.0, 1.0]
-    # distortion_coeffs: [0.07659126, -0.28776220, -0.00046609, -0.00756431, 0.30377170]

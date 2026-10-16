@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
         rate.sleep();
     }
 
-    // geofence: the UAV geofence from /system/mission/course (relayed by uav_bridge), else the config one
+    clearGeofence(node);
     if (use_geofence) {
         std::vector<double> fence_lat, fence_lon;
         if (!waitGeofence(node, geofence_topic, geofence_timeout, fence_lat, fence_lon)) {
@@ -283,6 +283,7 @@ int main(int argc, char **argv) {
         setTask(node, TASK_NONE);
     } else {
         RCLCPP_WARN(node->get_logger(), "TASK 2: SKIPPED (mission.use_task_2 = false)");
+        setMode(node, rate, "rtl");
     }
 
     // ============================== TASK 3 ======================================
@@ -321,6 +322,7 @@ int main(int argc, char **argv) {
         setTask(node, TASK_NONE);
     } else {
         RCLCPP_WARN(node->get_logger(), "TASK 3: SKIPPED (mission.use_task_3 = false)");
+        setMode(node, rate, "rtl");
     }
 
     // ============================== COMPLETE ====================================

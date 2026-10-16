@@ -142,7 +142,11 @@ class UavBridge(Node):
             return
         key = (msg.command_seq, msg.command_type)
         if key in self.seen_cmds:
-            return                                  # GCS re-sent the same command
+            # GCS re-sent the same command; a NEW command needs a new command_seq
+            self.get_logger().info(
+                f'Command seq {msg.command_seq} type {msg.command_type} already handled - ignored',
+                throttle_duration_sec=5.0)
+            return
         self.seen_cmds.add(key)
 
         if msg.command_type in tr.CMD_TASK4:
