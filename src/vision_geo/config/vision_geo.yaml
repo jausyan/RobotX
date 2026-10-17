@@ -1,7 +1,7 @@
 vision_geo_node:
   ros__parameters:
-    input_mode: "device"          
-    input_source: "/dev/video0"
+    input_mode: "file"          
+    input_source: "/home/robotx/RobotX/video/4.mp4"
     use_camera_info: false
     camera_info_topic: "/iris_with_camera_2/camera/camera_info"
     # camera_matrix: [612.23832801, 0.0, 292.50879046,
@@ -60,7 +60,7 @@ vision_geo_node:
     show_window: false
     window_name: "vision_geo"
     enable_stream: true
-    stream_host: "192.168.0.115"         
+    stream_host: "100.95.74.67"         
     stream_port: 5000
     stream_width: 640
     stream_height: 480
