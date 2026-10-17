@@ -334,6 +334,10 @@ private:
   int    obs_window_;           // observations kept per buoy for the median position
   bool   enable_testing_;       // testing: 1st blue buoy = entry, 2nd blue buoy = exit
   int    test_roles_given_ = 0; // enable_testing: blue roles handed out so far (0..2)
+  double survey_time_s_;        // Task 1 feedback (/vision_geo/map/buoy_*) held back this long after start
+  rclcpp::Time survey_start_{0, 0, RCL_ROS_TIME};
+  bool   survey_started_ = false;
+  bool   survey_done_ = false;
   std::set<std::pair<int, int>> seen_together_;  // buoy id pairs seen in the SAME frame → never fused
   int    track_exit_frames_;    // missed frames before track is committed
   double pixel_match_radius_px_; // pixel center distance to match same buoy across frames

@@ -70,6 +70,7 @@ VisionGeoNode::VisionGeoNode()
   max_tilt_deg_          = declare_parameter<double>("max_tilt_deg", 8.0);
   obs_window_            = declare_parameter<int>("obs_window", 200);
   enable_testing_        = declare_parameter<bool>("enable_testing", false);
+  survey_time_s_         = declare_parameter<double>("survey_time", 20.0);
 
   // display
   show_window_ = declare_parameter<bool>("show_window", true);
@@ -1184,6 +1185,26 @@ void VisionGeoNode::publishTargets(
 void VisionGeoNode::publishBuoyMap(const rclcpp::Time & stamp)
 {
   if (!home_set_) return;
+
+  // survey first: map the buoys for survey_time, then start the Task 1 feedback
+  // (the clock starts at the first detection frame after UAV-GO; a pause does not restart it)
+  if (!survey_done_) {
+    if (!survey_started_) {
+      survey_start_ = stamp;
+      survey_started_ = true;
+      RCLCPP_INFO(get_logger(), "[survey] started — buoy feedback in %.0f s", survey_time_s_);
+    }
+    const double elapsed = (stamp - survey_start_).seconds();
+    if (elapsed < survey_time_s_) {
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+        "[survey] %.0f / %.0f s — %zu buoys mapped, feedback not published yet",
+        elapsed, survey_time_s_, buoy_map_.size());
+      return;
+    }
+    survey_done_ = true;
+    RCLCPP_INFO(get_logger(), "[survey] done after %.0f s — publishing buoy feedback (%zu buoys)",
+      elapsed, buoy_map_.size());
+  }
 
   for (const auto & [state, pub] : state_pubs_) {
     vision_msgs::msg::DetectedObjectArray arr;
