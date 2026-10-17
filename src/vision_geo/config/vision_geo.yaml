@@ -48,7 +48,7 @@ vision_geo_node:
     min_obs_publish: 30           # show / publish a buoy only after this many observations
     max_tilt_deg: 8.0             # skip map updates while the drone leans more than this
     obs_window: 200               # observations kept per buoy for the median position
-    enable_testing: false         # true: 1st blue buoy = entry, 2nd blue buoy = exit (no blink check)
+    enable_testing: true         # true: 1st blue buoy = entry, 2nd blue buoy = exit (no blink check)
     show_window: false
     window_name: "vision_geo"
     enable_stream: true

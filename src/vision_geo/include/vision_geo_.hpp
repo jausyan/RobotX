@@ -116,6 +116,7 @@ private:
   // ── Setup ───────────────────────────────────────────────────────────────────
   void setupCameraIntrinsics();
   void setupCamToBodyRotation(double roll_deg, double pitch_deg, double yaw_deg);
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
 
   // ── Callbacks ───────────────────────────────────────────────────────────────
   void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg);

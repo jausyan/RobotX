@@ -201,6 +201,7 @@ VisionGeoNode::VisionGeoNode()
   marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
     marker_topic_, rclcpp::QoS(10));
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+  image_pub_ = create_publisher<sensor_msgs::msg::Image>("/image/raw", 10);
 
   for (size_t i = 0; i < class_names_.size(); ++i) {
     target_pubs_.push_back(create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -581,6 +582,21 @@ void VisionGeoNode::processFrame()
       capture_.set(cv::CAP_PROP_POS_FRAMES, 0);
       if (!capture_.read(frame) || frame.empty()) return;
     }
+    // Konversi cv::Mat ke sensor_msgs::msg::Image tanpa cv_bridge agar ringan
+    sensor_msgs::msg::Image img_msg;
+    img_msg.header.stamp = now();
+    img_msg.header.frame_id = pose_frame_id_;
+    img_msg.height = frame.rows;
+    img_msg.width = frame.cols;
+    img_msg.encoding = "bgr8";
+    img_msg.is_bigendian = false;
+    img_msg.step = frame.cols * frame.elemSize();
+    size_t size = img_msg.step * frame.rows;
+    img_msg.data.resize(size);
+    std::memcpy(img_msg.data.data(), frame.data, size);
+    
+    image_pub_->publish(img_msg);
+    // -----------------------------------------------------
   }
 
   // snapshot MAVROS state
