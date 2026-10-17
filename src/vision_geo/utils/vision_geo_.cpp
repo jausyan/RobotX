@@ -91,8 +91,10 @@ VisionGeoNode::VisionGeoNode()
 
   // mission order (read by main() in src/vision_geo.cpp) + per-class topics
   declare_parameter<std::string>("order_topic", "/mission/order");
-  declare_parameter<bool>("wait_for_order", true);
-  declare_parameter<double>("order_timeout", 3600.0);
+  paused_          = declare_parameter<bool>("wait_for_order", true);   // wait for a UAV-GO before detecting
+  started_         = !paused_;
+  order_timeout_s_ = declare_parameter<double>("order_timeout", 3600.0);
+  wait_start_      = now();
   order_sub_ = create_subscription<std_msgs::msg::String>(
     get_parameter("order_topic").as_string(), 10,
     [this](const std_msgs::msg::String::SharedPtr msg) { orderCallback(msg); });
@@ -227,6 +229,13 @@ VisionGeoNode::VisionGeoNode()
       map_topic_prefix_ + "buoy_" + state, rclcpp::QoS(10));
     RCLCPP_INFO(get_logger(), "buoy map → %sbuoy_%s", map_topic_prefix_.c_str(), state.c_str());
   }
+
+  // start clean: no residual buoys / targets from an earlier run reach the bridge, control or RViz.
+  // Repeated for 3 s so subscribers that are still connecting get it too.
+  clear_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this]() {
+    if (!started_) clearOutputs();
+    if (++clear_count_ >= 6) clear_timer_->cancel();
+  });
 
   // ── window ────────────────────────────────────────────────────────────────
   if (show_window_) {
@@ -480,7 +489,11 @@ void VisionGeoNode::addEdgeSample(const BuoyMapPoint & pt, const GeoPoint & obs)
   }
 }
 
-// MISSION-DONE → pause detection (map kept); UAV-GO → resume. Same matching as waitCommand.
+// UAV-GO:VISION-MAP        → map only   (/map/buoy_*, no /target)
+// UAV-GO:VISION-TARGET     → target only (/target/<class>, no map)
+// UAV-GO:VISION-MAP-TARGET → both
+// UAV-GO:VISION-PAUSE / MISSION-DONE → pause (map kept and still published)
+// any other UAV-GO... (plain, delivery orders) → start / resume with both, as before
 void VisionGeoNode::orderCallback(const std_msgs::msg::String::SharedPtr msg)
 {
   std::string cmd = msg->data;
@@ -489,14 +502,62 @@ void VisionGeoNode::orderCallback(const std_msgs::msg::String::SharedPtr msg)
   cmd = (first == std::string::npos) ? "" : cmd.substr(first, last - first + 1);
   std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
 
-  if (!paused_ && cmd.rfind("MISSION-DONE", 0) == 0) {
+  bool map = mode_map_, target = mode_target_, run = true;
+  if (cmd == "UAV-GO:VISION-MAP")                { map = true;  target = false; }
+  else if (cmd == "UAV-GO:VISION-TARGET")        { map = false; target = true;  }
+  else if (cmd == "UAV-GO:VISION-MAP-TARGET")    { map = true;  target = true;  }
+  else if (cmd == "UAV-GO:VISION-PAUSE" || cmd.rfind("MISSION-DONE", 0) == 0) run = false;
+  else if (cmd.rfind("UAV-GO", 0) == 0) {
+    if (!paused_) return;   // already running: keep the current mode
+    map = target = true;
+  } else {
+    return;
+  }
+
+  if (!run) {
+    if (paused_) return;
     paused_ = true;
     active_tracks_.clear();   // tracks would be stale after the pause
-    RCLCPP_INFO(get_logger(), "Received %s — vision paused, waiting for UAV-GO", cmd.c_str());
-  } else if (paused_ && cmd.rfind("UAV-GO", 0) == 0) {
-    paused_ = false;
-    RCLCPP_INFO(get_logger(), "Received %s — vision resumed", cmd.c_str());
+    if (mode_target_) publishZeroTargets(now());
+    RCLCPP_INFO(get_logger(), "Received %s — vision paused, waiting for UAV-GO:VISION-...", cmd.c_str());
+    return;
   }
+
+  if (mode_target_ && !target) publishZeroTargets(now());   // control must not keep a stale target
+  if (map && !mode_map_) active_tracks_.clear();              // tracks were not updated while the map was off
+  const bool changed = !started_ || paused_ || map != mode_map_ || target != mode_target_;
+  started_ = true;
+  paused_ = false;
+  mode_map_ = map;
+  mode_target_ = target;
+  if (changed) {
+    RCLCPP_INFO(get_logger(), "Received %s — vision running: map %s, target %s",
+      cmd.c_str(), mode_map_ ? "ON" : "off", mode_target_ ? "ON" : "off");
+  }
+}
+
+void VisionGeoNode::publishZeroTargets(const rclcpp::Time & stamp)
+{
+  publishTargets({}, stamp);   // no detections → every class all zeros = not detected
+}
+
+void VisionGeoNode::clearOutputs()
+{
+  const rclcpp::Time stamp = now();
+  publishZeroTargets(stamp);
+  for (const auto & [state, pub] : state_pubs_) {
+    vision_msgs::msg::DetectedObjectArray arr;
+    arr.header.stamp    = stamp;
+    arr.header.frame_id = marker_frame_id_;
+    pub->publish(arr);
+  }
+  visualization_msgs::msg::MarkerArray markers;
+  visualization_msgs::msg::Marker del;
+  del.action          = visualization_msgs::msg::Marker::DELETEALL;
+  del.header.frame_id = marker_frame_id_;
+  del.header.stamp    = stamp;
+  markers.markers.push_back(del);
+  marker_pub_->publish(markers);
 }
 
 // height above the water — rel_alt (MAVROS, height above home) is the main source
@@ -748,7 +809,7 @@ void VisionGeoNode::processFrame()
     if (!new_frame_ || latest_frame_.empty()) return;
     frame = latest_frame_.clone();
     new_frame_ = false;
-  } else {
+  } else if (!(paused_ && !using_camera_device_)) {   // a video file is not read while waiting / paused
     if (!capture_.read(frame) || frame.empty()) {
       if (using_camera_device_) {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
@@ -776,11 +837,22 @@ void VisionGeoNode::processFrame()
   }
 
   if (paused_) {
+    if (!started_) {
+      if ((now() - wait_start_).seconds() > order_timeout_s_) {
+        RCLCPP_ERROR(get_logger(), "No UAV-GO received in %.0f s, vision_geo exiting", order_timeout_s_);
+        rclcpp::shutdown();
+        return;
+      }
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Waiting for UAV-GO:VISION-MAP / VISION-TARGET / VISION-MAP-TARGET on %s",
+        get_parameter("order_topic").as_string().c_str());
+      return;
+    }
     // hold: no detection, keep the map on the topics for the bridge / RViz
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
-      "Paused after MISSION-DONE — waiting for UAV-GO (map: %zu buoys)", buoy_map_.size());
+      "Paused — waiting for UAV-GO:VISION-... (map: %zu buoys)", buoy_map_.size());
     static rclcpp::Time last_pub{0, 0, RCL_ROS_TIME};
-    if ((now() - last_pub).seconds() >= 1.0) {
+    if (mode_map_ && (now() - last_pub).seconds() >= 1.0) {
       last_pub = now();
       publishMarkers();
       publishBuoyMap(last_pub);
@@ -861,12 +933,14 @@ void VisionGeoNode::processFrame()
 
   const rclcpp::Time stamp = now();
   publishDetections(detections, geo_points, stamp);
-  publishTargets(detections, stamp);
-  updateMarkers(geo_dets, geo_dets_points, stamp);
-  if (mount_yaw_check_) checkMountYaw(state);
-  clusterBuoyMap();
+  if (mode_target_) publishTargets(detections, stamp);
+  if (mode_map_) {
+    updateMarkers(geo_dets, geo_dets_points, stamp);
+    if (mount_yaw_check_) checkMountYaw(state);
+    clusterBuoyMap();
+  }
   publishMarkers();
-  publishBuoyMap(stamp);
+  if (mode_map_) publishBuoyMap(stamp);
   streamFrame(frame, detections, geo_points);
   displayFrame(frame, detections, geo_points);
 
