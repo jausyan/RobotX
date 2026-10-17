@@ -4,6 +4,7 @@
 #include <chrono>
 #include <deque>
 #include <map>
+#include <set>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -91,7 +92,7 @@ public:
   };
 
   // One entry per PHYSICAL buoy in the GPS world map (any buoy class merges into it).
-  // Position = running mean of EVERY observation across all passes (converges in place).
+  // Position = median of the last obs_window observations (robust to sway / bad frames).
   // State = light pattern from the recent class history: red / green / entry (flashing blue) /
   //         exit (solid blue) / off / unknown (not enough history yet).
   struct BuoyMapPoint
@@ -99,15 +100,16 @@ public:
     int         buoy_id;
     int         class_id;
     std::string label;
-    double      sum_east = 0.0, sum_north = 0.0;   // accumulators
-    int         obs_count = 0;                     // total observations averaged in
-    double      east_m = 0.0, north_m = 0.0;       // = sum / obs_count (map ENU from home)
+    std::deque<std::pair<double, double>> obs_hist;  // last obs_window (east_m, north_m)
+    int         obs_count = 0;                     // total observations ever added
+    double      east_m = 0.0, north_m = 0.0;       // = median of obs_hist (map ENU from home)
     double      lat = 0.0, lon = 0.0;              // derived from east_m/north_m
     int         sighting_count = 0;                // distinct passes that confirmed it
     float       best_confidence = 0.0f;
     rclcpp::Time last_seen{0, 0, RCL_ROS_TIME};
     std::deque<std::pair<rclcpp::Time, std::string>> light_hist;  // (stamp, "red"/"green"/"blue"/"off")
     std::string state = "unknown";
+    int         test_role = 0;                     // enable_testing: 1 = entry, 2 = exit, 0 = none
   };
 
 private:
@@ -152,6 +154,10 @@ private:
   void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m,
                             float confidence, const rclcpp::Time & stamp);
   void publishMarkers();
+  // fuse map points closer than cluster_radius_m into one buoy (repeat until none left)
+  void clusterBuoyMap();
+  static void mergeBuoyInto(BuoyMapPoint & keep, BuoyMapPoint & gone);
+  static void updateBuoyPosition(BuoyMapPoint & pt, double home_lat, double home_lon);
 
   // ── Buoy light state (Task 1) ────────────────────────────────────────────────
   std::string lightColor(int class_id) const;   // "red"/"green"/"blue"/"off" from the class name
@@ -293,6 +299,13 @@ private:
 
   double map_merge_radius_m_;
   int    min_obs_to_commit_;    // min GPS frames in buffer before committing a track
+  double cluster_radius_m_;     // map points closer than this are the SAME buoy (< half buoy spacing)
+  int    min_obs_publish_;      // a map point is shown / published only after this many observations
+  double max_tilt_deg_;         // skip map observations while the drone tilts more than this
+  int    obs_window_;           // observations kept per buoy for the median position
+  bool   enable_testing_;       // testing: 1st blue buoy = entry, 2nd blue buoy = exit
+  int    test_roles_given_ = 0; // enable_testing: blue roles handed out so far (0..2)
+  std::set<std::pair<int, int>> seen_together_;  // buoy id pairs seen in the SAME frame → never fused
   int    track_exit_frames_;    // missed frames before track is committed
   double pixel_match_radius_px_; // pixel center distance to match same buoy across frames
 
