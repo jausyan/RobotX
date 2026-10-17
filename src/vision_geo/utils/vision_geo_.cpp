@@ -44,6 +44,10 @@ VisionGeoNode::VisionGeoNode()
   fixed_altitude_m_ = declare_parameter<double>("fixed_altitude_m", 15.0);
   max_pose_age_ms_ = declare_parameter<int>("max_pose_age_ms", 500);
   altitude_offset_m_ = declare_parameter<double>("altitude_offset_m", 0.0);
+  camera_latency_ms_ = declare_parameter<double>("camera_latency_ms", 0.0);
+  map_center_ratio_  = declare_parameter<double>("map_center_ratio", 1.0);
+  pnp_alt_check_     = declare_parameter<bool>("pnp_alt_check", false);
+  mount_yaw_check_   = declare_parameter<bool>("mount_yaw_check", false);
 
   // camera mount rotation (camera frame → body FLU frame)
   std::vector<double> rpy = declare_parameter<std::vector<double>>(
@@ -426,12 +430,111 @@ void VisionGeoNode::poseCallback(const geometry_msgs::msg::PoseStamped::SharedPt
   mavros_state_.alt_local   = msg->pose.position.z;
   mavros_state_.pose_valid  = true;
   mavros_state_.pose_z_valid = true;
+  mavros_state_.pose_stamp  = now();
+  pose_hist_.push_back(mavros_state_);
+  while (!pose_hist_.empty() &&
+         (mavros_state_.pose_stamp - pose_hist_.front().pose_stamp).seconds() > 2.0) {
+    pose_hist_.pop_front();
+  }
 }
 
 void VisionGeoNode::relAltCallback(const std_msgs::msg::Float64::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   mavros_state_.alt_agl = static_cast<double>(msg->data);
+  mavros_state_.rel_alt_stamp = now();
+  mavros_state_.rel_alt_valid = true;
+}
+
+// height above the water — rel_alt (MAVROS, height above home) is the main source
+double VisionGeoNode::altitudeAboveWater(const MavrosState & state) const
+{
+  const bool rel_alt_fresh = state.rel_alt_valid &&
+    (now() - state.rel_alt_stamp).seconds() < 1.0;
+  double alt;
+  if (rel_alt_fresh)          alt = state.alt_agl;
+  else if (state.pose_z_valid) alt = state.alt_local;
+  else                         alt = use_fixed_pose_ ? fixed_altitude_m_ : state.alt_agl;
+  return alt + altitude_offset_m_;
+}
+
+// the frame was captured camera_latency_ms before it was grabbed — use the pose from then
+VisionGeoNode::MavrosState VisionGeoNode::poseAt(const rclcpp::Time & t, const MavrosState & state)
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (pose_hist_.empty()) return state;
+  const MavrosState * best = &pose_hist_.back();
+  double best_dt = std::abs((best->pose_stamp - t).seconds());
+  for (const auto & p : pose_hist_) {
+    const double dt = std::abs((p.pose_stamp - t).seconds());
+    if (dt < best_dt) { best_dt = dt; best = &p; }
+  }
+  MavrosState out = state;   // GPS / rel_alt stay the latest
+  out.x_local = best->x_local;
+  out.y_local = best->y_local;
+  out.alt_local = best->alt_local;
+  out.qx = best->qx; out.qy = best->qy; out.qz = best->qz; out.qw = best->qw;
+  return out;
+}
+
+// PnP depth of the buoys vs the altitude: a steady difference = altitude or fx is wrong
+void VisionGeoNode::checkPnpAltitude(const std::vector<Detection> & dets, const MavrosState & state)
+{
+  std::vector<double> depths;
+  for (const auto & d : dets) {
+    cv::Mat rvec, tvec;
+    if (estimatePose(d, rvec, tvec)) depths.push_back(tvec.at<double>(2));
+  }
+  if (depths.empty()) return;
+  std::nth_element(depths.begin(), depths.begin() + depths.size() / 2, depths.end());
+  const double pnp = depths[depths.size() / 2];
+  const double alt = altitudeAboveWater(state);
+  if (alt < 0.5) return;   // no altitude yet
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+    "[check] altitude=%.1fm | PnP depth=%.1fm (median of %zu) | ratio=%.2f",
+    alt, pnp, depths.size(), alt > 0.5 ? pnp / alt : 0.0);
+}
+
+// Moving drone: buoys slide in the image opposite to the drone's motion. Rotate the image
+// motion to the world with the CURRENT cam_to_body and compare its direction to -drone motion;
+// the average angle difference is how much the configured mount yaw is off.
+void VisionGeoNode::checkMountYaw(const MavrosState & state)
+{
+  if (!state.pose_valid) { frame_flow_px_.clear(); return; }
+  const double de = state.x_local - yaw_chk_prev_e_;
+  const double dn = state.y_local - yaw_chk_prev_n_;
+  const bool had_prev = yaw_chk_has_prev_;
+  yaw_chk_prev_e_ = state.x_local;
+  yaw_chk_prev_n_ = state.y_local;
+  yaw_chk_has_prev_ = true;
+  if (!had_prev || std::hypot(de, dn) < 0.05 || frame_flow_px_.empty()) {
+    frame_flow_px_.clear();
+    return;
+  }
+
+  double du = 0.0, dv = 0.0;
+  for (const auto & [u, v] : frame_flow_px_) { du += u; dv += v; }
+  du /= frame_flow_px_.size();
+  dv /= frame_flow_px_.size();
+  frame_flow_px_.clear();
+  if (std::hypot(du, dv) < 1.0) return;
+
+  cv::Mat flow_cam = (cv::Mat_<double>(3, 1) << du, dv, 0.0);
+  cv::Mat flow_world =
+    quaternionToMat(state.qx, state.qy, state.qz, state.qw) * R_cam2body_ * flow_cam;
+  const double est = std::atan2(flow_world.at<double>(1), flow_world.at<double>(0));
+  const double truth = std::atan2(-dn, -de);
+  yaw_chk_sum_c_ += std::cos(truth - est);
+  yaw_chk_sum_s_ += std::sin(truth - est);
+  yaw_chk_n_++;
+
+  if (yaw_chk_n_ < 20) return;
+  const double off_deg = std::atan2(yaw_chk_sum_s_, yaw_chk_sum_c_) * 180.0 / M_PI;
+  const double spread = std::hypot(yaw_chk_sum_c_, yaw_chk_sum_s_) / yaw_chk_n_;  // 1 = consistent
+  const std::vector<double> rpy = get_parameter("cam_to_body_rpy").as_double_array();
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
+    "[check] mount yaw off by %.0f° (%d samples, consistency %.2f, trust if > 0.7) → cam_to_body_rpy: [%.0f, %.0f, %.0f]",
+    off_deg, yaw_chk_n_, spread, rpy[0], rpy[1], std::remainder(rpy[2] + off_deg, 360.0));
 }
 
 // ── Math helpers ───────────────────────────────────────────────────────────────
@@ -495,8 +598,7 @@ VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
 
   // altitude above the water, every frame: pose.position.z is the height above the EKF origin
   // (takeoff point), + altitude_offset_m = how high the takeoff point is above the water
-  const double alt = (state.pose_z_valid ? state.alt_local
-    : (use_fixed_pose_ ? fixed_altitude_m_ : state.alt_agl)) + altitude_offset_m_;
+  const double alt = altitudeAboveWater(state);
   if (alt < 0.5) {
     return result;  // too low to project reliably
   }
@@ -599,12 +701,16 @@ void VisionGeoNode::processFrame()
     // -----------------------------------------------------
   }
 
+  const rclcpp::Time frame_time =
+    now() - rclcpp::Duration::from_seconds(camera_latency_ms_ / 1000.0);
+
   // snapshot MAVROS state
   MavrosState state;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     state = mavros_state_;
   }
+  if (!use_fixed_pose_) state = poseAt(frame_time, state);
 
   // check pose freshness (only when using real MAVROS)
   if (!use_fixed_pose_) {
@@ -648,7 +754,13 @@ void VisionGeoNode::processFrame()
     geo_points[i] = projectPixelToGPS(u, v, state);
     geo_dets.push_back(detections[i]);
     geo_dets_points.push_back(geo_points[i]);
+    // image edges have the largest lens / calibration error — track there, but map from the centre
+    const bool in_center =
+      std::abs(u - frame.cols * 0.5f) <= map_center_ratio_ * frame.cols * 0.5f &&
+      std::abs(v - frame.rows * 0.5f) <= map_center_ratio_ * frame.rows * 0.5f;
+    if (!in_center) geo_dets_points.back().valid = false;
   }
+  if (pnp_alt_check_) checkPnpAltitude(geo_dets, state);
 
   // tilt gate: while the drone leans (sway / braking) the ground point is unreliable —
   // keep tracking in pixels but give the map no position this frame
@@ -664,6 +776,7 @@ void VisionGeoNode::processFrame()
   publishDetections(detections, geo_points, stamp);
   publishTargets(detections, stamp);
   updateMarkers(geo_dets, geo_dets_points, stamp);
+  if (mount_yaw_check_) checkMountYaw(state);
   clusterBuoyMap();
   publishMarkers();
   publishBuoyMap(stamp);
@@ -1146,8 +1259,13 @@ void VisionGeoNode::updateMarkers(
     if (best_di >= 0) {
       trk_matched[ti] = true;
       det_matched[best_di] = true;
-      t.cx = dets[best_di].box.x + dets[best_di].box.width  * 0.5f;
-      t.cy = dets[best_di].box.y + dets[best_di].box.height * 0.5f;
+      const float new_cx = dets[best_di].box.x + dets[best_di].box.width  * 0.5f;
+      const float new_cy = dets[best_di].box.y + dets[best_di].box.height * 0.5f;
+      if (mount_yaw_check_ && t.frames_missing == 0) {
+        frame_flow_px_.emplace_back(new_cx - t.cx, new_cy - t.cy);
+      }
+      t.cx = new_cx;
+      t.cy = new_cy;
       t.class_id       = dets[best_di].class_id;
       t.confidence     = dets[best_di].confidence;
       t.frames_missing = 0;
@@ -1624,11 +1742,8 @@ void VisionGeoNode::publishMarkers()
       if (mavros_state_.pose_z_valid) {
         drone_east  = mavros_state_.x_local;    // x = East
         drone_north = mavros_state_.y_local;    // y = North
-        drone_alt   = mavros_state_.alt_local + altitude_offset_m_;
-      } else {
-        // fallback before first pose message
-        drone_alt = use_fixed_pose_ ? fixed_altitude_m_ : mavros_state_.alt_agl;
       }
+      drone_alt = altitudeAboveWater(mavros_state_);
     }
 
     const auto t_now = now();
