@@ -57,7 +57,7 @@ VisionGeoNode::VisionGeoNode()
   marker_frame_id_ = declare_parameter<std::string>("marker_frame_id", "map");
   marker_lifetime_s_     = declare_parameter<double>("marker_lifetime_s", 0.0);
   marker_size_           = declare_parameter<double>("marker_size", 0.5);
-  map_merge_radius_m_    = declare_parameter<double>("map_merge_radius_m", 2.0);
+  map_merge_radius_m_    = declare_parameter<double>("map_merge_radius_m", 1.0);
   min_obs_to_commit_     = declare_parameter<int>("min_obs_to_commit", 5);
   track_exit_frames_     = declare_parameter<int>("track_exit_frames", 5);
   pixel_match_radius_px_ = declare_parameter<double>("pixel_match_radius_px", 100.0);
@@ -1033,43 +1033,109 @@ void VisionGeoNode::publishBuoyMap(const rclcpp::Time & stamp)
 }
 
 void VisionGeoNode::updateMarkers(
-  const std::vector<Detection> & dets,
-  const std::vector<GeoPoint> & geo,
+  const std::vector<Detection> & raw_dets,
+  const std::vector<GeoPoint> & raw_geo,
   const rclcpp::Time & stamp)
 {
   if (!home_set_) return;
 
-  // ── step 1: match detections → active tracks (pixel space) ───────────────
+  const double same_class_radius_m = 1.0;
+
+  // ── step 0: filter duplicate same-class detections within 1.0m in the same frame ──
+  // (raw_dets is already sorted by confidence descending from NMSBoxes)
+  std::vector<Detection> dets;
+  std::vector<GeoPoint> geo;
+  for (size_t i = 0; i < raw_dets.size(); ++i) {
+    const bool has_valid_geo = (i < raw_geo.size() && raw_geo[i].valid);
+    bool is_duplicate = false;
+
+    if (has_valid_geo) {
+      for (size_t j = 0; j < dets.size(); ++j) {
+        if (!geo[j].valid) continue;
+        if (raw_dets[i].class_id == dets[j].class_id) {
+          const double de = raw_geo[i].east_m - geo[j].east_m;
+          const double dn = raw_geo[i].north_m - geo[j].north_m;
+          if (std::hypot(de, dn) <= same_class_radius_m) {
+            is_duplicate = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!is_duplicate) {
+      dets.push_back(raw_dets[i]);
+      geo.push_back(has_valid_geo ? raw_geo[i] : GeoPoint{});
+    }
+  }
+
+  // ── step 1: match detections → active tracks (pixel space OR 1m same-class map space) ──
   std::vector<bool> det_matched(dets.size(), false);
   std::vector<bool> trk_matched(active_tracks_.size(), false);
 
   for (size_t ti = 0; ti < active_tracks_.size(); ++ti) {
-    float best_dist = static_cast<float>(pixel_match_radius_px_);
-    int   best_di   = -1;
+    auto & t = active_tracks_[ti];
+
+    // Calculate current track's map position (from linked buoy or buffered observations)
+    bool trk_has_enu = false;
+    double trk_e = 0.0, trk_n = 0.0;
+    if (t.linked_buoy_id >= 0) {
+      for (const auto & pt : buoy_map_) {
+        if (pt.buoy_id == t.linked_buoy_id) {
+          trk_e = pt.east_m;
+          trk_n = pt.north_m;
+          trk_has_enu = true;
+          break;
+        }
+      }
+    } else if (!t.enu_buf.empty()) {
+      for (const auto & [e, n_] : t.enu_buf) { trk_e += e; trk_n += n_; }
+      trk_e /= static_cast<double>(t.enu_buf.size());
+      trk_n /= static_cast<double>(t.enu_buf.size());
+      trk_has_enu = true;
+    }
+
+    float best_px_dist = static_cast<float>(pixel_match_radius_px_);
+    double best_geo_dist = same_class_radius_m;
+    int best_di = -1;
 
     for (size_t di = 0; di < dets.size(); ++di) {
-      if (det_matched[di]) continue;   // any buoy class: a flashing buoy changes class
+      if (det_matched[di]) continue;
 
       const float dcx = dets[di].box.x + dets[di].box.width  * 0.5f;
       const float dcy = dets[di].box.y + dets[di].box.height * 0.5f;
-      const float dx  = dcx - active_tracks_[ti].cx;
-      const float dy  = dcy - active_tracks_[ti].cy;
-      const float dist = std::sqrt(dx * dx + dy * dy);
+      const float px_dist = std::hypot(dcx - t.cx, dcy - t.cy);
 
-      if (dist < best_dist) { best_dist = dist; best_di = static_cast<int>(di); }
+      bool matched_by_px = (px_dist < best_px_dist);
+      bool matched_by_geo = false;
+
+      if (!matched_by_px && trk_has_enu && di < geo.size() && geo[di].valid &&
+          dets[di].class_id == t.class_id)
+      {
+        const double geo_dist = std::hypot(geo[di].east_m - trk_e, geo[di].north_m - trk_n);
+        if (geo_dist <= best_geo_dist) {
+          matched_by_geo = true;
+          best_geo_dist = geo_dist;
+        }
+      }
+
+      if (matched_by_px) {
+        best_px_dist = px_dist;
+        best_di = static_cast<int>(di);
+      } else if (matched_by_geo && best_di < 0) {
+        best_di = static_cast<int>(di);
+      }
     }
 
     if (best_di >= 0) {
       trk_matched[ti] = true;
       det_matched[best_di] = true;
-      auto & t = active_tracks_[ti];
       t.cx = dets[best_di].box.x + dets[best_di].box.width  * 0.5f;
       t.cy = dets[best_di].box.y + dets[best_di].box.height * 0.5f;
-      t.class_id      = dets[best_di].class_id;
-      t.confidence    = dets[best_di].confidence;
+      t.class_id       = dets[best_di].class_id;
+      t.confidence     = dets[best_di].confidence;
       t.frames_missing = 0;
 
-      // light observation: straight into the map point, or buffered until linked
       if (t.linked_buoy_id >= 0) {
         for (auto & pt : buoy_map_) {
           if (pt.buoy_id == t.linked_buoy_id) {
@@ -1087,7 +1153,6 @@ void VisionGeoNode::updateMarkers(
         const double e = geo[best_di].east_m;
         const double n = geo[best_di].north_m;
         if (t.linked_buoy_id >= 0) {
-          // already confirmed — feed each new observation into its running mean
           for (auto & pt : buoy_map_) {
             if (pt.buoy_id == t.linked_buoy_id) {
               addObservationToBuoy(pt, e, n, t.confidence, stamp);
@@ -1102,30 +1167,31 @@ void VisionGeoNode::updateMarkers(
   }
 
   // ── step 2: confirm tracks that reached enough observations ───────────────
-  //    A confirmed track links to a map point (new or existing within radius),
-  //    so the buoy appears on the map immediately — no need to exit the frame.
   for (auto & t : active_tracks_) {
     if (t.linked_buoy_id >= 0) continue;
     if (static_cast<int>(t.enu_buf.size()) < min_obs_to_commit_) continue;
 
     double sum_e = 0.0, sum_n = 0.0;
     for (const auto & [e, n_] : t.enu_buf) { sum_e += e; sum_n += n_; }
-    const double n       = static_cast<double>(t.enu_buf.size());
-    const double mean_e  = sum_e / n;
-    const double mean_n  = sum_n / n;
+    const double n      = static_cast<double>(t.enu_buf.size());
+    const double mean_e = sum_e / n;
+    const double mean_n = sum_n / n;
 
-    // merge check: any buoy within radius → SAME buoy (class may differ while flashing)
+    // Merge if within 1.0m (same class) OR within map_merge_radius_m_
     BuoyMapPoint * nearest = nullptr;
-    double nearest_dist = map_merge_radius_m_;
+    double nearest_dist = std::max(map_merge_radius_m_, same_class_radius_m);
     for (auto & pt : buoy_map_) {
-      const double dn   = mean_n - pt.north_m;
-      const double de   = mean_e - pt.east_m;
-      const double dist = std::sqrt(dn * dn + de * de);
-      if (dist < nearest_dist) { nearest_dist = dist; nearest = &pt; }
+      const double dist = std::hypot(mean_n - pt.north_m, mean_e - pt.east_m);
+      const double allowed_radius = (pt.class_id == t.class_id)
+        ? std::max(map_merge_radius_m_, same_class_radius_m)
+        : map_merge_radius_m_;
+      if (dist <= allowed_radius && dist < nearest_dist) {
+        nearest_dist = dist;
+        nearest = &pt;
+      }
     }
 
     if (nearest) {
-      // existing buoy re-sighted — fold this sighting's observations into its mean
       nearest->sighting_count++;
       for (const auto & [e, n_] : t.enu_buf)
         addObservationToBuoy(*nearest, e, n_, t.confidence, stamp);
@@ -1133,11 +1199,10 @@ void VisionGeoNode::updateMarkers(
         addLightObservation(*nearest, cid, ts);
       t.linked_buoy_id = nearest->buoy_id;
       RCLCPP_INFO(get_logger(),
-        "[map] buoy#%d '%s' re-sighted (sightings=%d, obs=%d, match=%.1fm)",
+        "[map] buoy#%d '%s' re-sighted (sightings=%d, obs=%d, match=%.2fm)",
         nearest->buoy_id, nearest->state.c_str(),
         nearest->sighting_count, nearest->obs_count, nearest_dist);
     } else {
-      // new buoy — seed a fresh map point with the buffered observations
       BuoyMapPoint pt;
       pt.buoy_id        = next_buoy_id_++;
       pt.class_id       = t.class_id;
@@ -1154,41 +1219,62 @@ void VisionGeoNode::updateMarkers(
         pt.buoy_id, pt.east_m, pt.north_m,
         pt.lat, pt.lon, pt.obs_count);
     }
-    t.enu_buf.clear();  // observations now live in the map point
+    t.enu_buf.clear();
     t.class_buf.clear();
   }
 
   // ── step 3: age unmatched tracks; drop those missing too long ─────────────
-  //    A dropped track's map point (if it was confirmed) stays permanent.
   std::vector<ActiveTrack> still_active;
   for (size_t ti = 0; ti < active_tracks_.size(); ++ti) {
     auto & t = active_tracks_[ti];
     if (trk_matched[ti]) {
-      still_active.push_back(std::move(t));       // seen this frame
+      still_active.push_back(std::move(t));
     } else {
       t.frames_missing++;
       if (t.frames_missing < track_exit_frames_)
-        still_active.push_back(std::move(t));      // grace period (occlusion/flicker)
-      // else: exited frame — discard track
+        still_active.push_back(std::move(t));
     }
   }
   active_tracks_ = std::move(still_active);
 
-  // ── step 4: unmatched detections → new active tracks ─────────────────────
+  // ── step 4: unmatched detections → link to existing 1m buoy or new track ──
   for (size_t di = 0; di < dets.size(); ++di) {
     if (det_matched[di]) continue;
     const int cid = dets[di].class_id;
+    const bool has_geo = (di < geo.size() && geo[di].valid);
+
+    // Check if this detection falls within 1.0m of an already-confirmed buoy of the same class
+    BuoyMapPoint * existing_buoy = nullptr;
+    double best_buoy_dist = same_class_radius_m;
+    if (has_geo) {
+      for (auto & pt : buoy_map_) {
+        if (pt.class_id != cid && lightColor(pt.class_id) != lightColor(cid)) continue;
+        const double dist = std::hypot(geo[di].east_m - pt.east_m, geo[di].north_m - pt.north_m);
+        if (dist <= best_buoy_dist) {
+          best_buoy_dist = dist;
+          existing_buoy = &pt;
+        }
+      }
+    }
+
     ActiveTrack t;
-    t.class_id  = cid;
-    t.label     = (cid >= 0 && cid < static_cast<int>(class_names_.size()))
+    t.class_id   = cid;
+    t.label      = (cid >= 0 && cid < static_cast<int>(class_names_.size()))
       ? class_names_[static_cast<size_t>(cid)] : ("class_" + std::to_string(cid));
     t.confidence = dets[di].confidence;
     t.cx = dets[di].box.x + dets[di].box.width  * 0.5f;
     t.cy = dets[di].box.y + dets[di].box.height * 0.5f;
-    if (di < geo.size() && geo[di].valid) {
-      t.enu_buf.emplace_back(geo[di].east_m, geo[di].north_m);
+
+    if (existing_buoy) {
+      t.linked_buoy_id = existing_buoy->buoy_id;
+      addObservationToBuoy(*existing_buoy, geo[di].east_m, geo[di].north_m, t.confidence, stamp);
+      addLightObservation(*existing_buoy, cid, stamp);
+    } else {
+      if (has_geo) {
+        t.enu_buf.emplace_back(geo[di].east_m, geo[di].north_m);
+      }
+      t.class_buf.emplace_back(stamp, cid);
     }
-    t.class_buf.emplace_back(stamp, cid);
     active_tracks_.push_back(t);
   }
 
