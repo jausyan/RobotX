@@ -105,6 +105,10 @@ VisionGeoNode::VisionGeoNode()
   map_topic_prefix_    = declare_parameter<std::string>("map_topic_prefix",
     "/vision_geo/map/");
   pose_frame_id_       = declare_parameter<std::string>("pose_frame_id", "camera");
+  offset_x_m_          = declare_parameter<double>("offset_x_m", 0.0);
+  offset_y_m_          = declare_parameter<double>("offset_y_m", 0.0);
+  offset_z_m_          = declare_parameter<double>("offset_z_m", 0.0);
+  crosshair_offset_y_px_ = declare_parameter<int>("crosshair_offset_y_px", 0);
   if (object_size_m_.empty()) object_size_m_.push_back(0.5);
   // classes that get GPS projection + map (Task 1); the rest only get a target pose
   const auto geo_classes = declare_parameter<std::vector<std::string>>("geo_classes", class_names_);
@@ -1275,10 +1279,10 @@ void VisionGeoNode::publishTargets(
       }
     }
 
-    if (best_dist >= 0.0) {
-      msg.pose.position.x = tvec.at<double>(0);
-      msg.pose.position.y = tvec.at<double>(1);
-      msg.pose.position.z = tvec.at<double>(2);
+    if (best_dist >= 0.0) {   // not detected stays all zeros (no offset)
+      msg.pose.position.x = tvec.at<double>(0) + offset_x_m_;
+      msg.pose.position.y = tvec.at<double>(1) + offset_y_m_;
+      msg.pose.position.z = tvec.at<double>(2) + offset_z_m_;
 
       // rvec (axis-angle) → quaternion
       const double angle = cv::norm(rvec);
@@ -2086,7 +2090,8 @@ void VisionGeoNode::updateFps()
 void VisionGeoNode::drawCrosshair(cv::Mat & frame) const
 {
   const cv::Scalar green(0, 255, 0);
-  cv::line(frame, {0, frame.rows / 2}, {frame.cols, frame.rows / 2}, green, 1);
+  const int center_y = std::clamp(frame.rows / 2 + crosshair_offset_y_px_, 0, frame.rows - 1);
+  cv::line(frame, {0, center_y}, {frame.cols, center_y}, green, 1);
   cv::line(frame, {frame.cols / 2, 0}, {frame.cols / 2, frame.rows}, green, 1);
 }
 
