@@ -77,6 +77,8 @@ public:
     double north_m = 0.0, east_m = 0.0;
     bool valid = false;
     bool center = true;   // inside map_center_ratio (edge positions are less accurate)
+    double drone_e = 0.0, drone_n = 0.0;  // drone position used for this projection
+    double r_norm = 0.0;                  // pixel distance from the principal point, 0 centre .. 1 corner
   };
 
   // Tracks a buoy currently visible in the frame (pixel space).
@@ -334,7 +336,13 @@ private:
   int    obs_window_;           // observations kept per buoy for the median position
   bool   enable_testing_;       // testing: 1st blue buoy = entry, 2nd blue buoy = exit
   int    test_roles_given_ = 0; // enable_testing: blue roles handed out so far (0..2)
-  double survey_time_s_;        // Task 1 feedback (/vision_geo/map/buoy_*) held back this long after start
+  double survey_time_s_;
+  // edge correction: ground offset × (1 + edge_k · r²), r = 0 centre .. 1 image corner
+  double edge_k_ = 0.0;
+  bool   edge_k_check_ = false;           // fit edge_k from buoys seen both in the centre and at the edge
+  double edge_fit_num_ = 0.0, edge_fit_den_ = 0.0, edge_fit_ang_ = 0.0;
+  int    edge_fit_n_ = 0;
+  void addEdgeSample(const BuoyMapPoint & pt, const GeoPoint & obs);        // Task 1 feedback (/vision_geo/map/buoy_*) held back this long after start
   rclcpp::Time survey_start_{0, 0, RCL_ROS_TIME};
   bool   survey_started_ = false;
   bool   survey_done_ = false;
