@@ -37,6 +37,8 @@ vision_geo_node:
     altitude_offset_m: 0.0        
     camera_latency_ms: 150.0      # frame age when grabbed; pose is taken from then (tune: fly a leg both ways)
     map_center_ratio: 0.7         # only detections in the central 70% of the image feed the map
+    edge_k: 0.0                   # edge correction: ground offset x (1 + edge_k*r^2), r 0 centre..1 corner
+    edge_k_check: true            # log the edge_k that fits buoys seen in the centre AND at the edge
     pnp_alt_check: true           # log PnP depth vs altitude (checks rel_alt / fx)
     mount_yaw_check: true         # log the cam_to_body_rpy yaw that matches the image motion
     output_topic:    "/vision_geo/detections"

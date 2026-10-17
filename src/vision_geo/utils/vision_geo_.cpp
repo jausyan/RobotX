@@ -71,6 +71,8 @@ VisionGeoNode::VisionGeoNode()
   obs_window_            = declare_parameter<int>("obs_window", 200);
   enable_testing_        = declare_parameter<bool>("enable_testing", false);
   survey_time_s_         = declare_parameter<double>("survey_time", 20.0);
+  edge_k_                = declare_parameter<double>("edge_k", 0.0);
+  edge_k_check_          = declare_parameter<bool>("edge_k_check", false);
 
   // display
   show_window_ = declare_parameter<bool>("show_window", true);
@@ -450,6 +452,34 @@ void VisionGeoNode::relAltCallback(const std_msgs::msg::Float64::SharedPtr msg)
   mavros_state_.rel_alt_valid = true;
 }
 
+// Edge sample: a buoy whose position comes from image-centre observations (accurate) seen
+// now near the edge. Compare the distance drone→buoy: centre reference vs this edge projection.
+// Least squares on  ref/obs - 1 = Δk · r²  gives the correction to add to edge_k.
+void VisionGeoNode::addEdgeSample(const BuoyMapPoint & pt, const GeoPoint & obs)
+{
+  int n_center = 0;
+  for (const auto & o : pt.obs_hist) if (std::get<2>(o)) ++n_center;
+  if (n_center < min_obs_to_commit_) return;    // no accurate centre reference yet
+  if (obs.r_norm < 0.3) return;
+
+  const double ref_e = pt.east_m - obs.drone_e, ref_n = pt.north_m - obs.drone_n;
+  const double obs_e = obs.east_m - obs.drone_e, obs_n = obs.north_m - obs.drone_n;
+  const double d_obs = std::hypot(obs_e, obs_n);
+  if (d_obs < 1.0) return;
+  const double r2 = obs.r_norm * obs.r_norm;
+  edge_fit_num_ += r2 * (std::hypot(ref_e, ref_n) / d_obs - 1.0);
+  edge_fit_den_ += r2 * r2;
+  edge_fit_ang_ += std::remainder(std::atan2(ref_n, ref_e) - std::atan2(obs_n, obs_e), 2.0 * M_PI);
+  edge_fit_n_++;
+
+  if (edge_fit_n_ >= 30) {
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
+      "[check] edge: %d samples → edge_k: %.3f (now %.3f) | mean angle error %.1f°",
+      edge_fit_n_, edge_k_ + edge_fit_num_ / edge_fit_den_, edge_k_,
+      edge_fit_ang_ / edge_fit_n_ * 180.0 / M_PI);
+  }
+}
+
 // MISSION-DONE → pause detection (map kept); UAV-GO → resume. Same matching as waitCommand.
 void VisionGeoNode::orderCallback(const std_msgs::msg::String::SharedPtr msg)
 {
@@ -673,8 +703,14 @@ VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
   const double t = alt / (-ray_z);
   // The quaternion produces ray_world in standard ENU: axis0 = East, axis1 = North.
   // MAVROS local_position/pose is also ENU: x = East, y = North, z = Up.
-  const double offset_east  = t * ray_world.at<double>(0);
-  const double offset_north = t * ray_world.at<double>(1);
+  // edge correction: the calibration is weakest at the image border (no board there) —
+  // scale the ground offset radially, 1 at the centre growing with r²
+  const double cx = camera_matrix_.at<double>(0, 2);
+  const double cy = camera_matrix_.at<double>(1, 2);
+  const double r_norm = std::hypot(u - cx, v - cy) / std::hypot(cx, cy);
+  const double edge_gain = 1.0 + edge_k_ * r_norm * r_norm;
+  const double offset_east  = t * ray_world.at<double>(0) * edge_gain;
+  const double offset_north = t * ray_world.at<double>(1) * edge_gain;
 
   // 5. drone position in the map frame (ENU meters from the EKF origin = home),
   //    same axes as the quaternion offset above
@@ -694,6 +730,9 @@ VisionGeoNode::GeoPoint VisionGeoNode::projectPixelToGPS(
   result.lon = home_lon_ + result.east_m  /
     (111320.0 * std::cos(home_lat_ * M_PI / 180.0));
   result.alt   = 0.0;
+  result.drone_e = drone_east;
+  result.drone_n = drone_north;
+  result.r_norm  = r_norm;
   result.valid = true;
   return result;
 }
@@ -1351,6 +1390,11 @@ void VisionGeoNode::updateMarkers(
 
       const bool has_geo =
         best_di < static_cast<int>(geo.size()) && geo[best_di].valid;
+      if (has_geo && edge_k_check_ && t.linked_buoy_id >= 0 && !geo[best_di].center) {
+        for (const auto & pt : buoy_map_) {
+          if (pt.buoy_id == t.linked_buoy_id) { addEdgeSample(pt, geo[best_di]); break; }
+        }
+      }
       if (has_geo) {
         const double e = geo[best_di].east_m;
         const double n = geo[best_di].north_m;
