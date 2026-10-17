@@ -63,6 +63,9 @@ public:
     double alt_local = 0.0;  // pose.position.z — Up from the EKF origin
     double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
     rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+    rclcpp::Time pose_stamp{0, 0, RCL_ROS_TIME};     // arrival time of the pose (for frame matching)
+    rclcpp::Time rel_alt_stamp{0, 0, RCL_ROS_TIME};  // arrival time of rel_alt
+    bool rel_alt_valid = false;
     bool gps_valid = false;
     bool pose_valid = false;
     bool pose_z_valid = false;
@@ -154,6 +157,12 @@ private:
   void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m,
                             float confidence, const rclcpp::Time & stamp);
   void publishMarkers();
+  // pose of the drone at a given time (nearest entry of pose_hist_), altitude kept from `state`
+  MavrosState poseAt(const rclcpp::Time & t, const MavrosState & state);
+  // height above the water: rel_alt → pose.z → fixed altitude, + altitude_offset_m
+  double altitudeAboveWater(const MavrosState & state) const;
+  void checkPnpAltitude(const std::vector<Detection> & dets, const MavrosState & state);
+  void checkMountYaw(const MavrosState & state);
   // fuse map points closer than cluster_radius_m into one buoy (repeat until none left)
   void clusterBuoyMap();
   static void mergeBuoyInto(BuoyMapPoint & keep, BuoyMapPoint & gone);
@@ -231,6 +240,17 @@ private:
   double fixed_altitude_m_;
   int max_pose_age_ms_;
   double altitude_offset_m_ = 0.0;   // takeoff point height above the water [m]
+  double camera_latency_ms_ = 0.0;   // frame grab → real capture time; pose is taken from then
+  double map_center_ratio_ = 1.0;    // only detections inside this central part of the image feed the map
+  bool   pnp_alt_check_ = false;     // log PnP depth vs altitude (checks altitude / fx)
+  bool   mount_yaw_check_ = false;   // log the cam_to_body yaw that matches the image motion
+  std::deque<MavrosState> pose_hist_;  // last ~2 s of poses (guarded by state_mutex_)
+  // mount yaw check: sums of unit vectors of (true - estimated) motion angle
+  double yaw_chk_sum_c_ = 0.0, yaw_chk_sum_s_ = 0.0;
+  int    yaw_chk_n_ = 0;
+  double yaw_chk_prev_e_ = 0.0, yaw_chk_prev_n_ = 0.0;
+  bool   yaw_chk_has_prev_ = false;
+  std::vector<std::pair<double, double>> frame_flow_px_;  // this frame: (du, dv) of tracked buoys
 
   std::string output_topic_;
   std::string marker_topic_;

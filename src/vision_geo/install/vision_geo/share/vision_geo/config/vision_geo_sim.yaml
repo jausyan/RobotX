@@ -1,0 +1,74 @@
+vision_geo_node:
+  ros__parameters:
+    input_mode: "topic"
+    input_source: "/iris_with_camera_2/camera/image_raw"
+    use_camera_info: true
+    camera_info_topic: "/iris_with_camera_2/camera/camera_info"
+    camera_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    distortion_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+    cam_to_body_rpy: [180.0, 0.0, 0.0]
+    model_path: "/home/el-system/robotX/models/buoys_1.onnx"
+    input_width: 320
+    input_height: 320
+    letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)
+    conf_threshold: 0.4
+    nms_threshold: 0.45
+    # OpenVINO (same as vision_video). false = OpenCV DNN
+    use_openvino: true
+    openvino_device: "CPU"
+    openvino_model_path: ""        # empty = model_path (.onnx); or an OpenVINO IR .xml
+    # one entry per YOLO class id — ORDER MUST MATCH THE MODEL'S CLASS ORDER
+    class_names:   ["buoy_red", "buoy_green", "buoy_blue", "buoy_off", "circle_red", "circle_green", "circle_blue"]
+    object_size_m: [0.4,        0.4,          0.4,         0.4,        0.65,         0.65,           0.65]  # real size per class (solvePnP)
+    geo_classes:   ["buoy_red", "buoy_green", "buoy_blue", "buoy_off"]   # GPS projection + map (Task 1 only); other classes → target pose only
+    gps_topic:     "/rian/global_position/global"
+    pose_topic:    "/rian/local_position/pose"
+    rel_alt_topic: "/rian/global_position/rel_alt"
+    use_fixed_pose: true
+    fixed_lat: -6.914744       # example KRTI arena coordinates
+    fixed_lon: 107.609810
+    fixed_altitude_m: 15.0
+    max_pose_age_ms: 500
+    altitude_offset_m: 0.0        # takeoff point height above the water [m] (e.g. 1.0 from a deck)
+    camera_latency_ms: 150.0      # frame age when grabbed; pose is taken from then (tune: fly a leg both ways)
+    map_center_ratio: 0.7         # only detections in the central 70% of the image feed the map
+    pnp_alt_check: true           # log PnP depth vs altitude (checks rel_alt / fx)
+    mount_yaw_check: true         # log the cam_to_body_rpy yaw that matches the image motion
+    output_topic:    "/vision_geo/detections"
+    marker_topic:    "/vision_geo/markers"
+    marker_frame_id: "map"
+    marker_lifetime_s: 0.0        # 0 = permanent (stay until RViz closed), >0 = seconds
+    marker_size: 0.8
+    pixel_match_radius_px: 100.0  # pixel center distance to match same buoy across consecutive frames
+    track_exit_frames: 25         # missed frames before a track is dropped (> a blink-off, ~1.5 s)
+    min_obs_to_commit: 5          # min GPS frames accumulated before committing (rejects brief detections)
+    map_merge_radius_m: 2.0       # GPS merge radius — small is safe since positions are averaged over frames
+    cluster_radius_m: 3.0         # map points closer than this = SAME buoy (keep < half the buoy spacing)
+    min_obs_publish: 30           # show / publish a buoy only after this many observations
+    max_tilt_deg: 8.0             # skip map updates while the drone leans more than this
+    obs_window: 200               # observations kept per buoy for the median position
+    enable_testing: false         # true: 1st blue buoy = entry, 2nd blue buoy = exit (no blink check)
+    show_window: true
+    window_name: "vision_geo_sim"
+    # GStreamer stream (same as vision_hailo): RTP/H.264 over UDP
+    enable_stream: false
+    stream_host: "192.168.0.127"          # ground station IP
+    stream_port: 5000
+    stream_width: 640
+    stream_height: 480
+    stream_fps: 30
+    stream_bitrate_kbps: 500
+    stream_undistort: false         # straighten ONLY the stream (detection/GPS keep the raw image)
+    stream_undistort_alpha: 1.0     # 1.0 = whole view (black curved borders), 0.0 = crop to clean rectangle
+    # mission order + per-class topics
+    order_topic: "/mission/order"         # vision starts on the first "UAV-GO..." message
+    wait_for_order: true                  # false = start detecting immediately (bench testing)
+    order_timeout: 3600.0                 # [s] give up waiting for "UAV-GO" and exit
+    target_topic_prefix: "/vision_geo/target/"   # PoseStamped per class (solvePnP, meters, closest one) → centering_red()
+    map_topic_prefix:    "/vision_geo/map/"      # + buoy_<red|green|entry|exit|off> (DetectedObjectArray, GPS)
+    pose_frame_id: "camera"
+    # buoy light state (Task 1): one map point per physical buoy, state from recent class history
+    state_window_s: 6.0                   # [s] light history kept per buoy (state changes show up within this time)
+    flash_gap_min_s: 0.6                  # [s] lit→lit gap counted as a flash (lights: 1 s on / 1 s off)
+    flash_gap_max_s: 1.6
+    solid_min_s: 3.0                      # [s] blue lit this long with no off → solid (EXIT)

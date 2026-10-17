@@ -30,6 +30,10 @@ vision_geo_node:
     fixed_altitude_m: 15.0
     max_pose_age_ms: 500
     altitude_offset_m: 0.0        # takeoff point height above the water [m] (e.g. 1.0 from a deck)
+    camera_latency_ms: 150.0      # frame age when grabbed; pose is taken from then (tune: fly a leg both ways)
+    map_center_ratio: 0.7         # only detections in the central 70% of the image feed the map
+    pnp_alt_check: true           # log PnP depth vs altitude (checks rel_alt / fx)
+    mount_yaw_check: true         # log the cam_to_body_rpy yaw that matches the image motion
     output_topic:    "/vision_geo/detections"
     marker_topic:    "/vision_geo/markers"
     marker_frame_id: "map"

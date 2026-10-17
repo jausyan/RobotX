@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/el-system/robotX/src/vision_geo/build/vision_geo/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
