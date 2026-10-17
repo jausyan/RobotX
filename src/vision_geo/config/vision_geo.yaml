@@ -49,11 +49,11 @@ vision_geo_node:
     min_obs_to_commit: 5          
     map_merge_radius_m: 2.0       
     cluster_radius_m: 3.0         # map points closer than this = SAME buoy (keep < half the buoy spacing)
-    min_obs_publish: 30           # show / publish a buoy only after this many observations
-    max_tilt_deg: 8.0             # skip map updates while the drone leans more than this
+    min_obs_publish: 15           # show / publish a buoy only after this many observations
+    max_tilt_deg: 7.0             # skip map updates while the drone leans more than this
     obs_window: 200               # observations kept per buoy for the median position
     enable_testing: true         # true: 1st blue buoy = entry, 2nd blue buoy = exit (no blink check)
-    survey_time: 20.0             # [s] map buoys this long after UAV-GO before publishing /vision_geo/map/buoy_* (Task 1 feedback)
+    survey_time: 10.0             # [s] map buoys this long after UAV-GO before publishing /vision_geo/map/buoy_* (Task 1 feedback)
     show_window: false
     window_name: "vision_geo"
     enable_stream: true
