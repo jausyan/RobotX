@@ -11,9 +11,9 @@ vision_geo_node:
     camera_matrix: [612.23832801, 0.0, 292.50879046, 0.0, 612.89511564, 229.65043225, 0.0, 0.0, 1.0]
     distortion_coeffs: [-0.49151925, 0.36591033, 0.00508743, 0.00177489, -0.26990208]
     cam_to_body_rpy: [180.0, 0.0, -90.0]
-    model_path: "/home/robotx/RobotX/models/b1.onnx"
-    input_width: 320
-    input_height: 320
+    model_path: "/home/robotx/RobotX/models/V6.onnx"
+    input_width: 640
+    input_height: 640
     letterbox: true                 
     camera_width: 640
     camera_height: 480
@@ -24,6 +24,7 @@ vision_geo_node:
     use_openvino: true
     openvino_device: "NPU"
     openvino_model_path: ""        
+    # class_names:   ["buoy_red", "buoy_blue", "circle_blue", "buoy_green", "circle_green", "buoy_black", "circle_red"]
     class_names:   ["buoy_blue", "buoy_green", "buoy_red", "buoy_green", "circle_green", "circle_blue", "circle_red"]
     object_size_m: [0.4,        0.4,          0.4,         0.4,        0.65,         0.65,           0.65]  
     gps_topic:     "/rian/global_position/global"     

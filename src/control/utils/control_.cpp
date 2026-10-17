@@ -2392,7 +2392,7 @@ void centering_red(
             }
             float dist_check = std::hypot(error_p.x, error_p.y);  // == dist_xy, recalc-safe
             if (dist_check <= centering_tolerance) {
-                RCLCPP_INFO(node->get_logger(), "++++++++++++ RED CENTERED! (%.3fm <= %.3fm) ++++++++++++", dist_check, centering_tolerance);
+                RCLCPP_INFO(node->get_logger(), "++++++++++++ JOSJIS..!! CENTERED! (%.3fm <= %.3fm) ++++++++++++", dist_check, centering_tolerance);
                 hold_pose = node->getCurrentLocalPose();
                 hold_pose.header.stamp = node->now();
                 hold_pose.header.frame_id = "map";
@@ -2406,14 +2406,14 @@ void centering_red(
 
             float roll = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_roll;
             float pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_pitch;
-            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "RED: dist=%.3f, roll=%.1f, pitch=%.1f", dist_xy, roll, pitch);
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "CENTERING CAKK..!!: dist=%.3f, roll=%.1f, pitch=%.1f", dist_xy, roll, pitch);
         } else {
             centered = false;
             have_last_error = false;
             last_vel = zero(last_vel); // reset so velocity ramps up smoothly on reacquire
             auto time_lost = (node->now() - last_detected_time).seconds();
             if (time_lost > 30.0) {
-                RCLCPP_WARN(node->get_logger(), "RED lost > 30s, aborting.");
+                RCLCPP_WARN(node->get_logger(), "OBJECT lost > 30s, aborting.");
                 break;
             }
 
@@ -2434,13 +2434,13 @@ void centering_red(
             hold_pose.header.stamp = node->now();
             hold_pose.header.frame_id = "map";
             node->publishLocalPosition(hold_pose);
-            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "RED not detected (%.1fs), holding position at (%.2f, %.2f, %.2f)", time_lost, hold_pose.pose.position.x, hold_pose.pose.position.y, hold_pose.pose.position.z);
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "OBJECT not detected (%.1fs), holding position at (%.2f, %.2f, %.2f)", time_lost, hold_pose.pose.position.x, hold_pose.pose.position.y, hold_pose.pose.position.z);
         }
         rclcpp::spin_some(node);
         rate.sleep();
     }
     node->publishLocalVelocity(zero(velocity_msg));
-    RCLCPP_INFO(node->get_logger(), "RED centering finished. Status: %s", status ? "SUCCESS" : "FAILED");
+    RCLCPP_INFO(node->get_logger(), "CENTERING FINISHH..!!. Status: %s", status ? "SUCCESS" : "FAILED");
 }
 
 namespace {

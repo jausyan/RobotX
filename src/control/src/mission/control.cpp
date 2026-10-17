@@ -155,7 +155,6 @@ int main(int argc, char **argv) {
     RCLCPP_INFO(node->get_logger(), "USV TOPIC   : %s", usv_gps_topic.c_str());
     RCLCPP_INFO(node->get_logger(), "DROP        : approach %.1f m, drop %.1f m", approach_alt, drop_alt);
 
-    // every waypoint an enabled task uses must exist (checked on the ground, before arming)
     size_t wp_needed = 0;
     if (use_task_1) wp_needed = std::max<size_t>(wp_needed, 1);   // survey_lat[0]
     if (use_task_2) wp_needed = std::max<size_t>(wp_needed, 4);   // survey_lat[2], [3]
@@ -250,44 +249,28 @@ int main(int argc, char **argv) {
     if (use_task_2) {
         setTask(node, TASK_INFRA_SURVEY_REPAIR);
         RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
-        // clearMission(node);
-        // pushMission(node, {create_waypoint(survey_lat[0], survey_lon[0], takeoff_altitude)});
-        // setMode(node, rate, "AUTO");
-        // waitForWP(node, rate, 1);
+        clearMission(node);
+        pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], takeoff_altitude)});
+        setMode(node, rate, "AUTO");
+        waitForWP(node, rate, 1);
         setMode(node, rate, "GUIDED");
         holdPosition(node, rate, posee, 1.0);
         waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);
         order = parseCommand(command);
         target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
-        RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s → %s", order.circle.c_str(), target.c_str());
+        RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s --> %s", order.circle.c_str(), target.c_str());
         fix_alt(node, rate, posee, approach_alt);
+        fix_alt_range(node, rate, posee, 5.0, 0.3, 30.0);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
-        fix_alt(node, rate, posee, drop_alt);
+        fix_alt_range(node, rate, posee, 2.0, 0.3, 30.0);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);
         if (centered) {
-            controlServoRepeated(node, channel, servo_buka, signal_repeat);
+            controlServoRepeated(node, 9, servo_buka, signal_repeat);
             holdPosition(node, rate, posee, hold_time);
         } else {
             RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
         }
-        // fix_alt(node, rate, posee, approach_alt);
-        // clearMission(node);
-        // pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], approach_alt)});
-        // setMode(node, rate, "AUTO");
-        // waitForWP(node, rate, 1);
-        setMode(node, rate, "rtl"); 
-        // holdPosition(node, rate, posee, hold_time);
-        // waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);
-        // target_circle = "circle_" + order.circle;
-        // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target_circle);
-        // fix_alt(node, rate, posee, drop_alt);
-        // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target_circle);
-        // if (centered) {
-        //     controlServoRepeated(node, channel, servo_buka, signal_repeat);
-        //     holdPosition(node, rate, posee, hold_time);
-        // } else {
-        //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
-        // }
+        setMode(node, rate, "rtl");
         setTask(node, TASK_NONE);
     } else {
         RCLCPP_WARN(node->get_logger(), "TASK 2: SKIPPED (mission.use_task_2 = false)");
@@ -301,7 +284,7 @@ int main(int argc, char **argv) {
         waitCommand(node, "UAV-GO", order_topic, command_timeout, true, &command);
         order = parseCommand(command);
         target = "tin_" + order.tin;
-        RCLCPP_INFO(node->get_logger(), "TASK 3: TIN %s → %s", order.tin.c_str(), target.c_str());
+        RCLCPP_INFO(node->get_logger(), "TASK 3: TIN %s --> %s", order.tin.c_str(), target.c_str());
         holdPosition(node, rate, posee, hold_time);
 
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
