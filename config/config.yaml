@@ -25,25 +25,25 @@
       hold_time: 1.0
 
       use_task_1: true
-      use_task_2: false
+      use_task_2: true
       use_task_3: false
 
       # geofence (pushed to ArduPilot before arming; the drone may only fly INSIDE the polygon)
-      use_geofence: true
+      use_geofence: false
       fence_type: 4                # ArduPilot FENCE_TYPE: 4 = polygon, 5 = polygon + max alt (FENCE_ALT_MAX), 0 = keep FC value
       # fallback polygon when no /system/mission/course arrives (>= 3 vertices, same index, decimals with a point)
       geofence_lat: [0.0]          # [0.0] = none (a ROS list param cannot be empty)
       geofence_lon: [0.0]
 
-      survey_lat: [-35.3632622, -35.3632622]   # <- replace [1]..[3] with the real points
-      survey_lon: [149.1653716, 149.1653716]
+      survey_lat: [-35.3632622, -35.3632622, -35.3632622, -35.3632622]   # <- replace [1]..[3] with the real points
+      survey_lon: [149.1653716, 149.1653716, 149.1653716, 149.1653716]
       survey_alt: 20.0             
       survey_time: 600.0            
 
       # Task 2 & 3: delivery
       usv_alt: 20.0  #alt              
       approach_alt: 10.0           # first centering altitude above the circle
-      drop_alt: 1.0               # final centering + drop altitude
+      drop_alt: 5.0               # final centering + drop altitude
 
     communication:
       order_topic: "/mission/order"                 # "UAV-GO" / "UAV-GO:<TIN>:<CIRCLE>" / "UAV-HOLD"
@@ -76,7 +76,7 @@
       hover_pitch: 0.0
       hover_roll: 0.0
       recovery_method: "local_pose"
-      centering_tolerance_first: 0.50 # 0.10 # 0.07 or 0.08 is safe
+      centering_tolerance_first: 0.30 # 0.10 # 0.07 or 0.08 is safe
       centering_tolerance_second: 0.20        
       hold_kp: 1.2
       detect_timeout: 0.4 

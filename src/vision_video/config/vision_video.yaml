@@ -1,8 +1,8 @@
 vision_video_node:
   ros__parameters:
     input_mode: "device"
-    input_source: "/dev/video2"
-    model_path: "/home/robotx/RobotX/models/b1.onnx"
+    input_source: "/home/el-system/robotX/video/danau.mp4"
+    model_path: "/home/el-system/robotX/models/V5.onnx"
     input_width: 320
     input_height: 320
     letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)
@@ -27,7 +27,7 @@ vision_video_node:
     object_width_m: 0.3
     object_height_m: 0.3
     pose_frame_id: "camera"
-    show_window: false
+    show_window: true
     window_name: "vision_video_detection"
     enable_stream: true
     stream_host: "192.168.0.115"
@@ -39,7 +39,7 @@ vision_video_node:
     stream_undistort: false         # straighten ONLY the stream (detection/GPS keep the raw image)
     stream_undistort_alpha: 1.0     # 1.0 = whole view (black curved borders), 0.0 = crop to clean rectangle
     use_openvino: true
-    openvino_device: "NPU"
+    openvino_device: "CPU"
     openvino_model_path: ""
 
 
