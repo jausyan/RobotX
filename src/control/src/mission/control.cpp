@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
         takeoff(node, rate, posee, takeoff_altitude, false);
         holdPosition(node, rate, posee, hold_time);
         clearMission(node);
-        pushMission(node, {create_waypoint(survey_lat[0], survey_lo n[0], takeoff_altitude)});
+        pushMission(node, {create_waypoint(survey_lat[0], survey_lon[0], takeoff_altitude)});
         setMode(node, rate, "AUTO");
         waitForWP(node, rate, 1);
         setMode(node, rate, "GUIDED");

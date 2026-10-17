@@ -2234,6 +2234,53 @@ void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, ge
     posee = node->getCurrentLocalPose();
 }
 
+void fix_alt_range(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_range, float tolerance, float timeout) {
+    RCLCPP_INFO(node->get_logger(), "=== fix_alt_range === range: %.3f m | requested: %.3f m",
+                node->getCurrentRangefinder().range, req_range);
+
+    // Hold XY, only change Z
+    geometry_msgs::msg::PoseStamped target_pose = node->getCurrentLocalPose();
+
+    rclcpp::Rate fast_rate(20.0);
+    auto start_time = node->now();
+    const rclcpp::Duration timeout_dur = rclcpp::Duration::from_seconds(timeout);
+    bool reached = false;
+
+    while (rclcpp::ok()) {
+        sensor_msgs::msg::Range rf = node->getCurrentRangefinder();
+        float current_z = node->getCurrentLocalPose().pose.position.z;
+        bool valid = rf.range > rf.min_range && rf.range < rf.max_range;
+        float diff = req_range - rf.range;
+
+        RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
+            "fix_alt_range: range=%.3f m | target=%.3f m | diff=%.3f m%s", rf.range, req_range, diff, valid ? "" : " (invalid, holding)");
+
+        if (valid && std::fabs(diff) <= tolerance) {
+            reached = true;
+            break;
+        }
+
+        if ((node->now() - start_time) > timeout_dur) {
+            RCLCPP_WARN(node->get_logger(), "fix_alt_range: timeout after %.1f s", timeout);
+            break;
+        }
+
+        if (valid) target_pose.pose.position.z = current_z + diff;
+        target_pose.header.stamp = node->now();
+        target_pose.header.frame_id = "map";
+        node->publishLocalPosition(target_pose);
+
+        rclcpp::spin_some(node);
+        fast_rate.sleep();
+    }
+
+    if (reached) {
+        RCLCPP_INFO(node->get_logger(), "fix_alt_range: reached range %.3f m", node->getCurrentRangefinder().range);
+    }
+
+    posee = node->getCurrentLocalPose();
+}
+
 void centering_red(
     const std::shared_ptr<DroneController>& node,
     rclcpp::Rate &rate,

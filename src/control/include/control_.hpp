@@ -417,6 +417,20 @@ void rotateByDegrees(const std::shared_ptr<DroneController>&node, rclcpp::Rate &
 
 void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_alt, float tolerance = 0.1, float timeout = 15.0);
 
+    /**
+     * Same as fix_alt, but the target is the RANGEFINDER reading (height above the surface below),
+     * not local z. Holds XY; each loop sets z = current z + (req_range - range).
+     *
+     * parameters:
+     * - req_range: wanted rangefinder reading in meters
+     * - tolerance: done when |req_range - range| <= tolerance
+     * - timeout:   give up after this many seconds
+     *
+     * returns:
+     * - posee: the pose at the end
+     */
+void fix_alt_range(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_range, float tolerance = 0.1, float timeout = 15.0);
+
 void centering_red(
     const std::shared_ptr<DroneController>&node,
     rclcpp::Rate &rate,
