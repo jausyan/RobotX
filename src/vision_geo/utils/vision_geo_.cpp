@@ -61,6 +61,11 @@ VisionGeoNode::VisionGeoNode()
   min_obs_to_commit_     = declare_parameter<int>("min_obs_to_commit", 5);
   track_exit_frames_     = declare_parameter<int>("track_exit_frames", 5);
   pixel_match_radius_px_ = declare_parameter<double>("pixel_match_radius_px", 100.0);
+  cluster_radius_m_      = declare_parameter<double>("cluster_radius_m", 3.0);
+  min_obs_publish_       = declare_parameter<int>("min_obs_publish", 30);
+  max_tilt_deg_          = declare_parameter<double>("max_tilt_deg", 8.0);
+  obs_window_            = declare_parameter<int>("obs_window", 200);
+  enable_testing_        = declare_parameter<bool>("enable_testing", false);
 
   // display
   show_window_ = declare_parameter<bool>("show_window", true);
@@ -629,10 +634,21 @@ void VisionGeoNode::processFrame()
     geo_dets_points.push_back(geo_points[i]);
   }
 
+  // tilt gate: while the drone leans (sway / braking) the ground point is unreliable —
+  // keep tracking in pixels but give the map no position this frame
+  const double tilt_deg = std::acos(std::clamp(
+    1.0 - 2.0 * (state.qx * state.qx + state.qy * state.qy), -1.0, 1.0)) * 180.0 / M_PI;
+  if (state.pose_valid && tilt_deg > max_tilt_deg_) {
+    for (auto & g : geo_dets_points) g.valid = false;
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+      "[map] tilt %.1f° > %.1f° — map update skipped", tilt_deg, max_tilt_deg_);
+  }
+
   const rclcpp::Time stamp = now();
   publishDetections(detections, geo_points, stamp);
   publishTargets(detections, stamp);
   updateMarkers(geo_dets, geo_dets_points, stamp);
+  clusterBuoyMap();
   publishMarkers();
   publishBuoyMap(stamp);
   streamFrame(frame, detections, geo_points);
@@ -1000,6 +1016,7 @@ void VisionGeoNode::publishBuoyMap(const rclcpp::Time & stamp)
 
     for (const auto & pt : buoy_map_) {
       if (pt.state != state) continue;
+      if (pt.obs_count < min_obs_publish_) continue;   // not confirmed enough yet
       vision_msgs::msg::DetectedObject obj;
       obj.header         = arr.header;
       obj.class_id       = pt.buoy_id;
@@ -1265,57 +1282,6 @@ void VisionGeoNode::updateMarkers(
   for (auto & pt : buoy_map_) {
     updateBuoyState(pt, stamp);
   }
-
-  // ── step 6: deduplicate confirmed buoys in buoy_map_ within 1.0m (same class/state) ──
-  for (size_t i = 0; i < buoy_map_.size(); ++i) {
-    for (size_t j = i + 1; j < buoy_map_.size(); ) {
-      auto & a = buoy_map_[i];
-      auto & b = buoy_map_[j];
-
-      const bool same_type =
-        (a.class_id == b.class_id) ||
-        (!a.state.empty() && a.state == b.state) ||
-        (lightColor(a.class_id) == lightColor(b.class_id));
-
-      const double dist = std::hypot(a.east_m - b.east_m, a.north_m - b.north_m);
-      if (same_type && dist <= same_class_radius_m) {
-        // Fold buoy 'b' into buoy 'a'
-        a.sum_east       += b.sum_east;
-        a.sum_north      += b.sum_north;
-        a.obs_count      += b.obs_count;
-        a.sighting_count += b.sighting_count;
-        a.east_m = a.sum_east  / a.obs_count;
-        a.north_m = a.sum_north / a.obs_count;
-        a.lat = home_lat_ + a.north_m / 111320.0;
-        a.lon = home_lon_ + a.east_m  / (111320.0 * std::cos(home_lat_ * M_PI / 180.0));
-        if (b.best_confidence > a.best_confidence) a.best_confidence = b.best_confidence;
-        if (b.last_seen > a.last_seen) a.last_seen = b.last_seen;
-
-        for (const auto & obs : b.light_hist) {
-          a.light_hist.push_back(obs);
-        }
-        std::sort(a.light_hist.begin(), a.light_hist.end(),
-          [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
-        updateBuoyState(a, stamp);
-
-        // Redirect any active tracks pointing to 'b' over to 'a'
-        const int removed_id = b.buoy_id;
-        for (auto & trk : active_tracks_) {
-          if (trk.linked_buoy_id == removed_id) {
-            trk.linked_buoy_id = a.buoy_id;
-          }
-        }
-
-        RCLCPP_INFO(get_logger(),
-          "[map] Merged duplicate buoy#%d into buoy#%d (same class/state, dist=%.2fm <= 1.0m)",
-          removed_id, a.buoy_id, dist);
-
-        buoy_map_.erase(buoy_map_.begin() + static_cast<std::ptrdiff_t>(j));
-      } else {
-        ++j;
-      }
-    }
-  }
 }
 
 std::string VisionGeoNode::lightColor(int class_id) const
@@ -1381,6 +1347,13 @@ void VisionGeoNode::updateBuoyState(BuoyMapPoint & pt, const rclcpp::Time & stam
     }
     if (color != "blue") {
       new_state = color;
+    } else if (enable_testing_) {
+      // testing: no blink check — 1st confirmed blue buoy = entry, 2nd = exit
+      if (pt.test_role == 0 && test_roles_given_ < 2 && pt.obs_count >= min_obs_publish_) {
+        pt.test_role = ++test_roles_given_;
+      }
+      if (pt.test_role == 1) new_state = "entry";
+      if (pt.test_role == 2) new_state = "exit";
     } else if (flashing) {
       new_state = "entry";
     } else if ((last_lit - first_lit).seconds() >= solid_min_s_) {
@@ -1409,17 +1382,111 @@ void VisionGeoNode::addObservationToBuoy(
   BuoyMapPoint & pt, double east_m, double north_m,
   float confidence, const rclcpp::Time & stamp)
 {
-  pt.sum_east  += east_m;
-  pt.sum_north += north_m;
+  pt.obs_hist.emplace_back(east_m, north_m);
+  while (static_cast<int>(pt.obs_hist.size()) > obs_window_) pt.obs_hist.pop_front();
   pt.obs_count += 1;
-  // running mean — converges in place (safe now that projection is map-absolute)
-  pt.east_m  = pt.sum_east  / pt.obs_count;
-  pt.north_m = pt.sum_north / pt.obs_count;
-  pt.lat = home_lat_ + pt.north_m / 111320.0;
-  pt.lon = home_lon_ + pt.east_m  /
-    (111320.0 * std::cos(home_lat_ * M_PI / 180.0));
+  updateBuoyPosition(pt, home_lat_, home_lon_);
   if (confidence > pt.best_confidence) pt.best_confidence = confidence;
   pt.last_seen = stamp;
+}
+
+// median of the kept observations — one bad frame (tilt spike, wrong box) can't pull it
+void VisionGeoNode::updateBuoyPosition(BuoyMapPoint & pt, double home_lat, double home_lon)
+{
+  if (pt.obs_hist.empty()) return;
+  std::vector<double> es, ns;
+  es.reserve(pt.obs_hist.size());
+  ns.reserve(pt.obs_hist.size());
+  for (const auto & [e, n] : pt.obs_hist) { es.push_back(e); ns.push_back(n); }
+  const size_t mid = es.size() / 2;
+  std::nth_element(es.begin(), es.begin() + mid, es.end());
+  std::nth_element(ns.begin(), ns.begin() + mid, ns.end());
+  pt.east_m  = es[mid];
+  pt.north_m = ns[mid];
+  pt.lat = home_lat + pt.north_m / 111320.0;
+  pt.lon = home_lon + pt.east_m  / (111320.0 * std::cos(home_lat * M_PI / 180.0));
+}
+
+// fold `gone` into `keep` (positions, light history, counts, testing role)
+void VisionGeoNode::mergeBuoyInto(BuoyMapPoint & keep, BuoyMapPoint & gone)
+{
+  for (const auto & o : gone.obs_hist) keep.obs_hist.push_back(o);
+  keep.obs_count      += gone.obs_count;
+  keep.sighting_count += gone.sighting_count;
+  keep.best_confidence = std::max(keep.best_confidence, gone.best_confidence);
+  if (gone.last_seen > keep.last_seen) keep.last_seen = gone.last_seen;
+
+  for (const auto & h : gone.light_hist) keep.light_hist.push_back(h);
+  std::sort(keep.light_hist.begin(), keep.light_hist.end(),
+    [](const auto & a, const auto & b) { return a.first < b.first; });
+
+  if (keep.test_role == 0 || (gone.test_role != 0 && gone.test_role < keep.test_role)) {
+    keep.test_role = gone.test_role;
+  }
+  if (keep.state == "unknown") keep.state = gone.state;
+}
+
+// Map points of the SAME buoy drift apart (sway, re-tracked after a blink) → clusters.
+// Repeatedly fuse the closest pair under cluster_radius_m until no pair is left.
+void VisionGeoNode::clusterBuoyMap()
+{
+  // two buoys visible in the same frame are two REAL buoys — remember, never fuse them
+  std::vector<int> in_frame;
+  for (const auto & t : active_tracks_) {
+    if (t.frames_missing == 0 && t.linked_buoy_id >= 0) in_frame.push_back(t.linked_buoy_id);
+  }
+  for (size_t a = 0; a < in_frame.size(); ++a) {
+    for (size_t b = a + 1; b < in_frame.size(); ++b) {
+      if (in_frame[a] == in_frame[b]) continue;
+      seen_together_.insert(std::minmax(in_frame[a], in_frame[b]));
+    }
+  }
+
+  while (true) {
+    int    best_i = -1, best_j = -1;
+    double best_d = cluster_radius_m_;
+    for (size_t i = 0; i < buoy_map_.size(); ++i) {
+      for (size_t j = i + 1; j < buoy_map_.size(); ++j) {
+        const double de = buoy_map_[i].east_m  - buoy_map_[j].east_m;
+        const double dn = buoy_map_[i].north_m - buoy_map_[j].north_m;
+        const double d  = std::sqrt(de * de + dn * dn);
+        if (seen_together_.count(std::minmax(buoy_map_[i].buoy_id, buoy_map_[j].buoy_id))) continue;
+        if (d < best_d) { best_d = d; best_i = static_cast<int>(i); best_j = static_cast<int>(j); }
+      }
+    }
+    if (best_i < 0) return;
+
+    // keep the older buoy (lower id) so ids stay stable
+    if (buoy_map_[best_j].buoy_id < buoy_map_[best_i].buoy_id) std::swap(best_i, best_j);
+    auto & keep = buoy_map_[best_i];
+    auto & gone = buoy_map_[best_j];
+    const int gone_id = gone.buoy_id;
+    const bool lost_role = keep.test_role != 0 && gone.test_role != 0;
+
+    mergeBuoyInto(keep, gone);
+    // keep the newest obs_window observations for the median
+    while (static_cast<int>(keep.obs_hist.size()) > obs_window_) keep.obs_hist.pop_front();
+    updateBuoyPosition(keep, home_lat_, home_lon_);
+
+    for (auto & t : active_tracks_) {
+      if (t.linked_buoy_id == gone_id) t.linked_buoy_id = keep.buoy_id;
+    }
+    // whatever was seen together with the gone buoy was also seen together with keep
+    std::set<std::pair<int, int>> remapped;
+    for (const auto & [a, b] : seen_together_) {
+      const int ra = (a == gone_id) ? keep.buoy_id : a;
+      const int rb = (b == gone_id) ? keep.buoy_id : b;
+      if (ra != rb) remapped.insert(std::minmax(ra, rb));
+    }
+    seen_together_ = std::move(remapped);
+    // entry + exit fused (were the same buoy) → the next blue buoy becomes exit
+    if (lost_role) test_roles_given_ = keep.test_role;
+
+    RCLCPP_INFO(get_logger(),
+      "[map] buoy#%d fused into buoy#%d (%.1fm apart) → E=%.1fm N=%.1fm obs=%d",
+      gone_id, keep.buoy_id, best_d, keep.east_m, keep.north_m, keep.obs_count);
+    buoy_map_.erase(buoy_map_.begin() + best_j);
+  }
 }
 
 void VisionGeoNode::publishMarkers()
@@ -1441,6 +1508,7 @@ void VisionGeoNode::publishMarkers()
 
   // ── confirmed buoy map ────────────────────────────────────────────────────
   for (const auto & pt : buoy_map_) {
+    if (pt.obs_count < min_obs_publish_) continue;   // not confirmed enough yet
     auto [cr, cg, cb] = stateColor(pt.state);
 
     visualization_msgs::msg::Marker sphere;

@@ -41,9 +41,14 @@ vision_geo_node:
     marker_lifetime_s: 0.0        
     marker_size: 0.8              
     pixel_match_radius_px: 100.0  
-    track_exit_frames: 5          
+    track_exit_frames: 25         # missed frames before a track is dropped (> a blink-off, ~1.5 s)
     min_obs_to_commit: 5          
     map_merge_radius_m: 2.0       
+    cluster_radius_m: 3.0         # map points closer than this = SAME buoy (keep < half the buoy spacing)
+    min_obs_publish: 30           # show / publish a buoy only after this many observations
+    max_tilt_deg: 8.0             # skip map updates while the drone leans more than this
+    obs_window: 200               # observations kept per buoy for the median position
+    enable_testing: false         # true: 1st blue buoy = entry, 2nd blue buoy = exit (no blink check)
     show_window: false
     window_name: "vision_geo"
     enable_stream: true
