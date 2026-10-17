@@ -8,7 +8,7 @@ vision_geo_node:
                     0.0, 506.13168687, 243.99035432,
                     0.0, 0.0, 1.0]
     distortion_coeffs: [0.07771398, -0.18711237, -0.00182709, 0.00026326, -0.06212367]
-    cam_to_body_rpy: [180.0, 0.0, 0.0]
+    cam_to_body_rpy: [180.0, 0.0, -90.0]   # nadir, image top = drone nose (mount_yaw_check: -84°/-92°)
     model_path: "/home/el-system/robotX/models/V5.onnx"
     input_width: 320
     input_height: 320
