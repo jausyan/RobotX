@@ -24,8 +24,8 @@
       takeoff_altitude: 15.0
       hold_time: 1.0
 
-      use_task_1: true
-      use_task_2: false
+      use_task_1: false
+      use_task_2: true
       use_task_3: false
 
       # geofence 
@@ -34,8 +34,8 @@
       geofence_lat: [0.0]          
       geofence_lon: [0.0]
 
-      survey_lat: [-7.286423, -7.286423, -7.286423, -7.286423]  
-      survey_lon: [112.796013, 112.796013, 112.796013, 112.796013]
+      survey_lat: [-7.2863208, -7.2863208, -7.2863208, -7.2863208]  
+      survey_lon: [112.7961644, 112.7961644, 112.7961644, 112.7961644]
       survey_alt: 20.0             
       survey_time: 600.0            
 
