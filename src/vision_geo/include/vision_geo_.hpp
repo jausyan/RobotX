@@ -307,6 +307,10 @@ private:
   std::string target_topic_prefix_;
   std::string map_topic_prefix_;
   std::string pose_frame_id_;
+  double offset_x_m_ = 0.0;             // added to /target poses (camera frame) — shifts the centering point
+  double offset_y_m_ = 0.0;
+  double offset_z_m_ = 0.0;
+  int    crosshair_offset_y_px_ = 0;    // moves the drawn horizontal crosshair line (display / stream only)
 
   // ── Camera intrinsics ────────────────────────────────────────────────────────
   cv::Mat camera_matrix_;
