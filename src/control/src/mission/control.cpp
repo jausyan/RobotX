@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
         rate.sleep();
     }
 
-    // geofence: the UAV geofence from /system/mission/course (relayed by uav_bridge), else the config one
+    clearGeofence(node);
     if (use_geofence) {
         std::vector<double> fence_lat, fence_lon;
         if (!waitGeofence(node, geofence_topic, geofence_timeout, fence_lat, fence_lon)) {
@@ -198,6 +198,7 @@ int main(int argc, char **argv) {
     }
 
     setTask(node, TASK_NONE);
+    controlServoRepeated(node, 9, servo_tutup, signal_repeat);
     setMode(node, rate, "GUIDED");
     RCLCPP_INFO(node->get_logger(), "PRE-RUN CONFIRMATION 1 / 0? (1 : WAIT FOR RUN START, 0 : ABORT)");
     std::cin >> confirmation;
@@ -226,11 +227,12 @@ int main(int argc, char **argv) {
         setMode(node, rate, "AUTO");
         waitForWP(node, rate, 1);
         setMode(node, rate, "GUIDED");
-        holdPosition(node, rate, posee, 3.0);
+        holdPosition(node, rate, posee, 1.0);
         pubCommand(node, "UAV-GO", order_topic);
         waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
+        holdPosition(node, rate, posee, 2.0);
         setMode(node, rate, "rtl");
-        waitCommand(node, "MISSION-DONE", order_topic, command_timeout, true);
+        waitCommand(node, "UAV-GO", order_topic, command_timeout, true);
         takeoff(node, rate, posee, takeoff_altitude, false);
         holdPosition(node, rate, posee, hold_time);
         clearMission(node);
@@ -248,41 +250,48 @@ int main(int argc, char **argv) {
     if (use_task_2) {
         setTask(node, TASK_INFRA_SURVEY_REPAIR);
         RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
+        // clearMission(node);
+        // pushMission(node, {create_waypoint(survey_lat[0], survey_lon[0], takeoff_altitude)});
+        // setMode(node, rate, "AUTO");
+        // waitForWP(node, rate, 1);
+        setMode(node, rate, "GUIDED");
+        holdPosition(node, rate, posee, 1.0);
         waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);
         order = parseCommand(command);
-        target = "buoy_" + order.tin;
-        RCLCPP_INFO(node->get_logger(), "TASK 2: TIN %s → %s", order.tin.c_str(), target.c_str());
+        target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
+        RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s → %s", order.circle.c_str(), target.c_str());
         fix_alt(node, rate, posee, approach_alt);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
         fix_alt(node, rate, posee, drop_alt);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);
-        if (centered) {
-            controlServoRepeated(node, channel, servo_tutup, signal_repeat);
-            holdPosition(node, rate, posee, hold_time);
-        } else {
-            RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
-        }
-        fix_alt(node, rate, posee, approach_alt);
-        clearMission(node);
-        pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], approach_alt)});
-        setMode(node, rate, "AUTO");
-        waitForWP(node, rate, 1);
-        setMode(node, rate, "GUIDED");
-        holdPosition(node, rate, posee, hold_time);
-        waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);
-        target_circle = "circle_" + order.circle;
-        centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target_circle);
-        fix_alt(node, rate, posee, drop_alt);
-        centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target_circle);
         if (centered) {
             controlServoRepeated(node, channel, servo_buka, signal_repeat);
             holdPosition(node, rate, posee, hold_time);
         } else {
             RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
         }
+        // fix_alt(node, rate, posee, approach_alt);
+        // clearMission(node);
+        // pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], approach_alt)});
+        // setMode(node, rate, "AUTO");
+        // waitForWP(node, rate, 1);
+        setMode(node, rate, "rtl"); 
+        // holdPosition(node, rate, posee, hold_time);
+        // waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);
+        // target_circle = "circle_" + order.circle;
+        // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target_circle);
+        // fix_alt(node, rate, posee, drop_alt);
+        // centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target_circle);
+        // if (centered) {
+        //     controlServoRepeated(node, channel, servo_buka, signal_repeat);
+        //     holdPosition(node, rate, posee, hold_time);
+        // } else {
+        //     RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
+        // }
         setTask(node, TASK_NONE);
     } else {
         RCLCPP_WARN(node->get_logger(), "TASK 2: SKIPPED (mission.use_task_2 = false)");
+        setMode(node, rate, "rtl");
     }
 
     // ============================== TASK 3 ======================================
@@ -321,12 +330,13 @@ int main(int argc, char **argv) {
         setTask(node, TASK_NONE);
     } else {
         RCLCPP_WARN(node->get_logger(), "TASK 3: SKIPPED (mission.use_task_3 = false)");
+        setMode(node, rate, "rtl");
     }
 
     // ============================== COMPLETE ====================================
     setTask(node, TASK_NONE);
     RCLCPP_INFO(node->get_logger(), "ALL TASKS DONE, RTL...");
-    setMode(node, rate, "land");
+    setMode(node, rate, "rtl");
     RCLCPP_INFO(node->get_logger(), "=========== ALHAMDULILLAH MISSION COMPLETE ===========");
     rclcpp::shutdown();
     return 0;
