@@ -2,7 +2,7 @@ vision_video_node:
   ros__parameters:
     input_mode: "device"
     input_source: "/dev/video0"
-    model_path: "/home/robotx/RobotX/models/payload_krti_320.onnx"
+    model_path: "/home/robotx/RobotX/models/enhance_nano.onnx"
     input_width: 320
     input_height: 320
     letterbox: true                 # keep the aspect ratio into the model (16:9 camera -> no squashing)

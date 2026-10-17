@@ -226,7 +226,7 @@ int main(int argc, char **argv) {
         setMode(node, rate, "AUTO");
         waitForWP(node, rate, 1);
         setMode(node, rate, "GUIDED");
-        holdPosition(node, rate, posee, 3.0);
+        holdPosition(node, rate, posee, 1.0);
         pubCommand(node, "UAV-GO", order_topic);
         waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
         setMode(node, rate, "rtl");
@@ -328,7 +328,7 @@ int main(int argc, char **argv) {
     // ============================== COMPLETE ====================================
     setTask(node, TASK_NONE);
     RCLCPP_INFO(node->get_logger(), "ALL TASKS DONE, RTL...");
-    setMode(node, rate, "land");
+    setMode(node, rate, "rtl");
     RCLCPP_INFO(node->get_logger(), "=========== ALHAMDULILLAH MISSION COMPLETE ===========");
     rclcpp::shutdown();
     return 0;

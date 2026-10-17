@@ -30,7 +30,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import State
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rx_msgs.msg import (Command, Course, Heartbeat, LatLng, MissionStatus,
                          ResourceDelivery, SafePassage, BuoyDetection)
 from sensor_msgs.msg import NavSatFix
@@ -91,11 +91,13 @@ class UavBridge(Node):
 
         # ---- publishers ---------------------------------------------------------
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        # heartbeats are BEST_EFFORT: a stale heartbeat is useless, never wait for resends
+        heartbeat_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.order_pub = self.create_publisher(String, g('topics.order'), 10)
         self.usv_gps_pub = self.create_publisher(NavSatFix, g('topics.usv_gps'), 10)
         # latched: control may start after the GCS sent the course (it is sent once)
         self.geofence_pub = self.create_publisher(Float64MultiArray, g('topics.geofence'), latched)
-        self.hb_pub = self.create_publisher(Heartbeat, veh + '/heartbeat', 10)
+        self.hb_pub = self.create_publisher(Heartbeat, veh + '/heartbeat', heartbeat_qos)
         self.status_pub = self.create_publisher(MissionStatus, g('system.status'), 10)
         self.sp_pub = self.create_publisher(SafePassage, veh + '/task1/safe_passage', 10)
         self.delivery_pubs = {task: self.create_publisher(
@@ -107,7 +109,8 @@ class UavBridge(Node):
         # VOLATILE: the GCS publishes the course VOLATILE; a TRANSIENT_LOCAL subscriber would be
         # incompatible and receive nothing (a VOLATILE one matches both kinds of publisher)
         self.create_subscription(Course, g('system.course'), self.course_cb, 10)
-        self.create_subscription(Heartbeat, g('system.usv_heartbeat'), self.usv_cb, 10)
+        self.create_subscription(Heartbeat, g('system.usv_heartbeat'), self.usv_cb,
+                                 heartbeat_qos)
         self.create_subscription(String, g('topics.order'), self.order_cb, 10)
         self.create_subscription(UInt8, g('topics.current_task'), self.task_cb, latched)
         prefix = g('topics.buoy_map_prefix').rstrip('/') + '/'

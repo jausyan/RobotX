@@ -34,8 +34,8 @@
       geofence_lat: [0.0]          
       geofence_lon: [0.0]
 
-      survey_lat: [-7.2773883, -7.2773883, -7.2773883, -7.2773883]  
-      survey_lon: [112.7985229, 112.7985229, 112.7985229, 112.7985229]
+      survey_lat: [-7.286423, -7.286423, -7.286423, -7.286423]  
+      survey_lon: [112.796013, 112.796013, 112.796013, 112.796013]
       survey_alt: 20.0             
       survey_time: 600.0            
 
@@ -84,6 +84,6 @@
       channel_red: 9               
       channel_green: 10
       channel_blue: 11
-      servo_buka: 1900             
-      servo_tutup: 2200
+      servo_buka: 900             
+      servo_tutup: 270
       signal_repeat: 3
