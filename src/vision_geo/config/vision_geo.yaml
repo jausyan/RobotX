@@ -11,9 +11,9 @@ vision_geo_node:
     camera_matrix: [612.23832801, 0.0, 292.50879046, 0.0, 612.89511564, 229.65043225, 0.0, 0.0, 1.0]
     distortion_coeffs: [-0.49151925, 0.36591033, 0.00508743, 0.00177489, -0.26990208]
     cam_to_body_rpy: [180.0, 0.0, 0.0]
-    model_path: "/home/robotx/RobotX/models/V5.onnx"
-    input_width: 320
-    input_height: 320
+    model_path: "/home/robotx/RobotX/models/V6.onnx"
+    input_width: 640
+    input_height: 640
     letterbox: true                 
     camera_width: 640
     camera_height: 480
