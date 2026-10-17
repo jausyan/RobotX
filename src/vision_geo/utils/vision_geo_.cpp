@@ -90,6 +90,9 @@ VisionGeoNode::VisionGeoNode()
   declare_parameter<std::string>("order_topic", "/mission/order");
   declare_parameter<bool>("wait_for_order", true);
   declare_parameter<double>("order_timeout", 3600.0);
+  order_sub_ = create_subscription<std_msgs::msg::String>(
+    get_parameter("order_topic").as_string(), 10,
+    [this](const std_msgs::msg::String::SharedPtr msg) { orderCallback(msg); });
   object_size_m_       = declare_parameter<std::vector<double>>("object_size_m",
     std::vector<double>{0.5});
   target_topic_prefix_ = declare_parameter<std::string>("target_topic_prefix",
@@ -446,6 +449,25 @@ void VisionGeoNode::relAltCallback(const std_msgs::msg::Float64::SharedPtr msg)
   mavros_state_.rel_alt_valid = true;
 }
 
+// MISSION-DONE → pause detection (map kept); UAV-GO → resume. Same matching as waitCommand.
+void VisionGeoNode::orderCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  std::string cmd = msg->data;
+  const auto first = cmd.find_first_not_of(" \t\r\n");
+  const auto last  = cmd.find_last_not_of(" \t\r\n");
+  cmd = (first == std::string::npos) ? "" : cmd.substr(first, last - first + 1);
+  std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::toupper);
+
+  if (!paused_ && cmd.rfind("MISSION-DONE", 0) == 0) {
+    paused_ = true;
+    active_tracks_.clear();   // tracks would be stale after the pause
+    RCLCPP_INFO(get_logger(), "Received %s — vision paused, waiting for UAV-GO", cmd.c_str());
+  } else if (paused_ && cmd.rfind("UAV-GO", 0) == 0) {
+    paused_ = false;
+    RCLCPP_INFO(get_logger(), "Received %s — vision resumed", cmd.c_str());
+  }
+}
+
 // height above the water — rel_alt (MAVROS, height above home) is the main source
 double VisionGeoNode::altitudeAboveWater(const MavrosState & state) const
 {
@@ -519,6 +541,13 @@ void VisionGeoNode::checkMountYaw(const MavrosState & state)
   frame_flow_px_.clear();
   if (std::hypot(du, dv) < 1.0) return;
 
+  // fx check: a ground point moves fx · d / altitude pixels when the drone moves d metres
+  const double alt = altitudeAboveWater(state);
+  if (alt > 0.5) {
+    fx_chk_px_ += std::hypot(du, dv) * alt;
+    fx_chk_m_  += std::hypot(de, dn);
+  }
+
   cv::Mat flow_cam = (cv::Mat_<double>(3, 1) << du, dv, 0.0);
   cv::Mat flow_world =
     quaternionToMat(state.qx, state.qy, state.qz, state.qw) * R_cam2body_ * flow_cam;
@@ -535,6 +564,11 @@ void VisionGeoNode::checkMountYaw(const MavrosState & state)
   RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
     "[check] mount yaw off by %.0f° (%d samples, consistency %.2f, trust if > 0.7) → cam_to_body_rpy: [%.0f, %.0f, %.0f]",
     off_deg, yaw_chk_n_, spread, rpy[0], rpy[1], std::remainder(rpy[2] + off_deg, 360.0));
+  if (fx_chk_m_ > 0.0) {
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
+      "[check] fx from image motion = %.0f px (camera_matrix fx = %.0f)",
+      fx_chk_px_ / fx_chk_m_, camera_matrix_.at<double>(0, 0));
+  }
 }
 
 // ── Math helpers ───────────────────────────────────────────────────────────────
@@ -701,6 +735,19 @@ void VisionGeoNode::processFrame()
     // -----------------------------------------------------
   }
 
+  if (paused_) {
+    // hold: no detection, keep the map on the topics for the bridge / RViz
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+      "Paused after MISSION-DONE — waiting for UAV-GO (map: %zu buoys)", buoy_map_.size());
+    static rclcpp::Time last_pub{0, 0, RCL_ROS_TIME};
+    if ((now() - last_pub).seconds() >= 1.0) {
+      last_pub = now();
+      publishMarkers();
+      publishBuoyMap(last_pub);
+    }
+    return;
+  }
+
   const rclcpp::Time frame_time =
     now() - rclcpp::Duration::from_seconds(camera_latency_ms_ / 1000.0);
 
@@ -758,7 +805,7 @@ void VisionGeoNode::processFrame()
     const bool in_center =
       std::abs(u - frame.cols * 0.5f) <= map_center_ratio_ * frame.cols * 0.5f &&
       std::abs(v - frame.rows * 0.5f) <= map_center_ratio_ * frame.rows * 0.5f;
-    if (!in_center) geo_dets_points.back().valid = false;
+    geo_dets_points.back().center = in_center;
   }
   if (pnp_alt_check_) checkPnpAltitude(geo_dets, state);
 
@@ -1289,12 +1336,13 @@ void VisionGeoNode::updateMarkers(
         if (t.linked_buoy_id >= 0) {
           for (auto & pt : buoy_map_) {
             if (pt.buoy_id == t.linked_buoy_id) {
-              addObservationToBuoy(pt, e, n, t.confidence, stamp);
+              addObservationToBuoy(pt, e, n, geo[best_di].center, t.confidence, stamp);
               break;
             }
           }
         } else {
           t.enu_buf.emplace_back(e, n);
+          t.enu_center.push_back(geo[best_di].center);
         }
       }
     }
@@ -1327,8 +1375,9 @@ void VisionGeoNode::updateMarkers(
 
     if (nearest) {
       nearest->sighting_count++;
-      for (const auto & [e, n_] : t.enu_buf)
-        addObservationToBuoy(*nearest, e, n_, t.confidence, stamp);
+      for (size_t k = 0; k < t.enu_buf.size(); ++k)
+        addObservationToBuoy(*nearest, t.enu_buf[k].first, t.enu_buf[k].second,
+                             k < t.enu_center.size() && t.enu_center[k], t.confidence, stamp);
       for (const auto & [ts, cid] : t.class_buf)
         addLightObservation(*nearest, cid, ts);
       t.linked_buoy_id = nearest->buoy_id;
@@ -1342,8 +1391,9 @@ void VisionGeoNode::updateMarkers(
       pt.class_id       = t.class_id;
       pt.label          = "buoy";
       pt.sighting_count = 1;
-      for (const auto & [e, n_] : t.enu_buf)
-        addObservationToBuoy(pt, e, n_, t.confidence, stamp);
+      for (size_t k = 0; k < t.enu_buf.size(); ++k)
+        addObservationToBuoy(pt, t.enu_buf[k].first, t.enu_buf[k].second,
+                             k < t.enu_center.size() && t.enu_center[k], t.confidence, stamp);
       for (const auto & [ts, cid] : t.class_buf)
         addLightObservation(pt, cid, ts);
       t.linked_buoy_id = pt.buoy_id;
@@ -1354,6 +1404,7 @@ void VisionGeoNode::updateMarkers(
         pt.lat, pt.lon, pt.obs_count);
     }
     t.enu_buf.clear();
+    t.enu_center.clear();
     t.class_buf.clear();
   }
 
@@ -1401,11 +1452,13 @@ void VisionGeoNode::updateMarkers(
 
     if (existing_buoy) {
       t.linked_buoy_id = existing_buoy->buoy_id;
-      addObservationToBuoy(*existing_buoy, geo[di].east_m, geo[di].north_m, t.confidence, stamp);
+      addObservationToBuoy(*existing_buoy, geo[di].east_m, geo[di].north_m, geo[di].center,
+                           t.confidence, stamp);
       addLightObservation(*existing_buoy, cid, stamp);
     } else {
       if (has_geo) {
         t.enu_buf.emplace_back(geo[di].east_m, geo[di].north_m);
+        t.enu_center.push_back(geo[di].center);
       }
       t.class_buf.emplace_back(stamp, cid);
     }
@@ -1513,25 +1566,35 @@ std::tuple<float, float, float> VisionGeoNode::stateColor(const std::string & st
 }
 
 void VisionGeoNode::addObservationToBuoy(
-  BuoyMapPoint & pt, double east_m, double north_m,
+  BuoyMapPoint & pt, double east_m, double north_m, bool center,
   float confidence, const rclcpp::Time & stamp)
 {
-  pt.obs_hist.emplace_back(east_m, north_m);
+  pt.obs_hist.emplace_back(east_m, north_m, center);
   while (static_cast<int>(pt.obs_hist.size()) > obs_window_) pt.obs_hist.pop_front();
   pt.obs_count += 1;
-  updateBuoyPosition(pt, home_lat_, home_lon_);
+  updateBuoyPosition(pt, home_lat_, home_lon_, min_obs_to_commit_);
   if (confidence > pt.best_confidence) pt.best_confidence = confidence;
   pt.last_seen = stamp;
 }
 
-// median of the kept observations — one bad frame (tilt spike, wrong box) can't pull it
-void VisionGeoNode::updateBuoyPosition(BuoyMapPoint & pt, double home_lat, double home_lon)
+// median of the kept observations — one bad frame (tilt spike, wrong box) can't pull it.
+// Image-centre observations are more accurate: use only them once there are enough,
+// otherwise (buoy only ever seen near the edge) use all.
+void VisionGeoNode::updateBuoyPosition(BuoyMapPoint & pt, double home_lat, double home_lon,
+                                       int min_center_obs)
 {
   if (pt.obs_hist.empty()) return;
+  int n_center = 0;
+  for (const auto & o : pt.obs_hist) if (std::get<2>(o)) ++n_center;
+  const bool center_only = n_center >= min_center_obs;
   std::vector<double> es, ns;
   es.reserve(pt.obs_hist.size());
   ns.reserve(pt.obs_hist.size());
-  for (const auto & [e, n] : pt.obs_hist) { es.push_back(e); ns.push_back(n); }
+  for (const auto & [e, n, c] : pt.obs_hist) {
+    if (center_only && !c) continue;
+    es.push_back(e);
+    ns.push_back(n);
+  }
   const size_t mid = es.size() / 2;
   std::nth_element(es.begin(), es.begin() + mid, es.end());
   std::nth_element(ns.begin(), ns.begin() + mid, ns.end());
@@ -1600,7 +1663,7 @@ void VisionGeoNode::clusterBuoyMap()
     mergeBuoyInto(keep, gone);
     // keep the newest obs_window observations for the median
     while (static_cast<int>(keep.obs_hist.size()) > obs_window_) keep.obs_hist.pop_front();
-    updateBuoyPosition(keep, home_lat_, home_lon_);
+    updateBuoyPosition(keep, home_lat_, home_lon_, min_obs_to_commit_);
 
     for (auto & t : active_tracks_) {
       if (t.linked_buoy_id == gone_id) t.linked_buoy_id = keep.buoy_id;

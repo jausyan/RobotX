@@ -76,6 +76,7 @@ public:
     double lat = 0.0, lon = 0.0, alt = 0.0;
     double north_m = 0.0, east_m = 0.0;
     bool valid = false;
+    bool center = true;   // inside map_center_ratio (edge positions are less accurate)
   };
 
   // Tracks a buoy currently visible in the frame (pixel space).
@@ -89,6 +90,7 @@ public:
     float       confidence = 0.0f;
     float       cx = 0.0f, cy = 0.0f;              // last pixel center
     std::vector<std::pair<double, double>> enu_buf; // (east_m, north_m) map coords, pre-link
+    std::vector<bool> enu_center;                   // per enu_buf entry: seen in the image centre
     std::vector<std::pair<rclcpp::Time, int>> class_buf; // (stamp, class_id) light observations, pre-link
     int         frames_missing = 0;
     int         linked_buoy_id = -1;               // -1 until confirmed & linked
@@ -103,7 +105,7 @@ public:
     int         buoy_id;
     int         class_id;
     std::string label;
-    std::deque<std::pair<double, double>> obs_hist;  // last obs_window (east_m, north_m)
+    std::deque<std::tuple<double, double, bool>> obs_hist;  // last obs_window (east_m, north_m, center)
     int         obs_count = 0;                     // total observations ever added
     double      east_m = 0.0, north_m = 0.0;       // = median of obs_hist (map ENU from home)
     double      lat = 0.0, lon = 0.0;              // derived from east_m/north_m
@@ -155,7 +157,7 @@ private:
     const std::vector<GeoPoint> & geo,
     const rclcpp::Time & stamp);
   // add one observation to a buoy's running mean and refresh derived fields
-  void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m,
+  void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m, bool center,
                             float confidence, const rclcpp::Time & stamp);
   void publishMarkers();
   // pose of the drone at a given time (nearest entry of pose_hist_), altitude kept from `state`
@@ -167,7 +169,8 @@ private:
   // fuse map points closer than cluster_radius_m into one buoy (repeat until none left)
   void clusterBuoyMap();
   static void mergeBuoyInto(BuoyMapPoint & keep, BuoyMapPoint & gone);
-  static void updateBuoyPosition(BuoyMapPoint & pt, double home_lat, double home_lon);
+  static void updateBuoyPosition(BuoyMapPoint & pt, double home_lat, double home_lon,
+                                 int min_center_obs);
 
   // ── Buoy light state (Task 1) ────────────────────────────────────────────────
   std::string lightColor(int class_id) const;   // "red"/"green"/"blue"/"off" from the class name
@@ -249,6 +252,11 @@ private:
   // mount yaw check: sums of unit vectors of (true - estimated) motion angle
   double yaw_chk_sum_c_ = 0.0, yaw_chk_sum_s_ = 0.0;
   int    yaw_chk_n_ = 0;
+  double fx_chk_px_ = 0.0, fx_chk_m_ = 0.0;   // fx check: image motion [px] · altitude vs drone motion [m]
+  // MISSION-DONE pauses detection until the next UAV-GO (map is kept and still published)
+  bool paused_ = false;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr order_sub_;
+  void orderCallback(const std_msgs::msg::String::SharedPtr msg);
   double yaw_chk_prev_e_ = 0.0, yaw_chk_prev_n_ = 0.0;
   bool   yaw_chk_has_prev_ = false;
   std::vector<std::pair<double, double>> frame_flow_px_;  // this frame: (du, dv) of tracked buoys
