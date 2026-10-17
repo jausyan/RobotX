@@ -2479,6 +2479,8 @@ bool waitCommand(const std::shared_ptr<DroneController>&node, const std::string 
         [&](const std_msgs::msg::String::SharedPtr msg) {
             if (has_command) return;
             const std::string recv_cmd = toUpperTrim(msg->data);
+            // "UAV-GO:VISION-..." only switches vision_geo, never take it as a mission order
+            if (recv_cmd.rfind("UAV-GO:VISION-", 0) == 0 && exp_cmd.rfind("UAV-GO:VISION-", 0) != 0) return;
             if (recv_cmd.rfind(exp_cmd, 0) == 0) {   // "UAV-GO:RED:BLUE" matches "UAV-GO"
                 received_command = recv_cmd;
                 has_command = true;

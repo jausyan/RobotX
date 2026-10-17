@@ -255,10 +255,21 @@ private:
   double yaw_chk_sum_c_ = 0.0, yaw_chk_sum_s_ = 0.0;
   int    yaw_chk_n_ = 0;
   double fx_chk_px_ = 0.0, fx_chk_m_ = 0.0;   // fx check: image motion [px] · altitude vs drone motion [m]
-  // MISSION-DONE pauses detection until the next UAV-GO (map is kept and still published)
+  // vision mode from the order topic:
+  //   UAV-GO:VISION-MAP / VISION-TARGET / VISION-MAP-TARGET → run with those outputs
+  //   UAV-GO:VISION-PAUSE or MISSION-DONE → pause (map kept and still published)
   bool paused_ = false;
+  bool started_ = false;           // first start order received
+  bool mode_map_ = true;           // build + publish the buoy map (map_topic_prefix)
+  bool mode_target_ = true;        // publish target_topic_prefix<class>
+  double order_timeout_s_ = 3600.0;
+  rclcpp::Time wait_start_;
+  int clear_count_ = 0;
+  rclcpp::TimerBase::SharedPtr clear_timer_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr order_sub_;
   void orderCallback(const std_msgs::msg::String::SharedPtr msg);
+  void clearOutputs();                                   // empty map, zero targets, no markers
+  void publishZeroTargets(const rclcpp::Time & stamp);   // all classes "not detected"
   double yaw_chk_prev_e_ = 0.0, yaw_chk_prev_n_ = 0.0;
   bool   yaw_chk_has_prev_ = false;
   std::vector<std::pair<double, double>> frame_flow_px_;  // this frame: (du, dv) of tracked buoys
