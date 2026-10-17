@@ -258,8 +258,8 @@ int main(int argc, char **argv) {
         holdPosition(node, rate, posee, 1.0);
         waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);
         order = parseCommand(command);
-        target = "circle_" + order.tin;
-        RCLCPP_INFO(node->get_logger(), "TASK 2: TIN %s → %s", order.tin.c_str(), target.c_str());
+        target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
+        RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s → %s", order.circle.c_str(), target.c_str());
         fix_alt(node, rate, posee, approach_alt);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
         fix_alt(node, rate, posee, drop_alt);
