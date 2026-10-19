@@ -1,0 +1,24 @@
+{
+  "name": "startup_2",
+  "saved_at": 1792411200.0,
+  "device": "/dev/video0",
+  "mode": {
+    "fourcc": "MJPG",
+    "width": 640,
+    "height": 480,
+    "fps": 30
+  },
+  "controls": {
+    "brightness": 0,
+    "contrast": 35,
+    "saturation": 100,
+    "white_balance_automatic": 0,
+    "gain": 1,
+    "power_line_frequency": 1,
+    "white_balance_temperature": 5000,
+    "sharpness": 1,
+    "backlight_compensation": 0,
+    "auto_exposure": 1,
+    "exposure_time_absolute": 50
+  }
+}
