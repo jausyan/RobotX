@@ -37,3 +37,4 @@ vision_video_node:
     use_openvino: true
     openvino_device: "NPU"
     openvino_model_path: ""
+    class_names: ["payload-krti-experiment"]   # index = model class id (empty = show class=<id>)

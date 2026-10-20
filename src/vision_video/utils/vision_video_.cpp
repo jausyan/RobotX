@@ -34,6 +34,7 @@ VisionVideoNode::VisionVideoNode()
   use_openvino_ = declare_parameter<bool>("use_openvino", false);
   openvino_device_ = declare_parameter<std::string>("openvino_device", "CPU");
   openvino_model_path_ = declare_parameter<std::string>("openvino_model_path", "");
+  class_names_ = declare_parameter<std::vector<std::string>>("class_names", std::vector<std::string>{});
   object_width_m_ = declare_parameter<double>("object_width_m", 0.3);
   object_height_m_ = declare_parameter<double>("object_height_m", 0.3);
   pose_frame_id_ = declare_parameter<std::string>("pose_frame_id", "camera");
@@ -423,12 +424,20 @@ void VisionVideoNode::updateFps()
   }
 }
 
+std::string VisionVideoNode::className(int class_id) const
+{
+  if (class_id >= 0 && class_id < static_cast<int>(class_names_.size())) {
+    return class_names_[static_cast<size_t>(class_id)];
+  }
+  return "class=" + std::to_string(class_id);
+}
+
 void VisionVideoNode::drawDetections(cv::Mat & frame, const std::vector<Detection> & detections) const
 {
   for (const auto & det : detections) {
     cv::rectangle(frame, det.box, cv::Scalar(0, 255, 0), 2);
     const std::string label =
-      cv::format("class=%d conf=%.2f", det.class_id, static_cast<double>(det.confidence));
+      cv::format("%s %.2f", className(det.class_id).c_str(), static_cast<double>(det.confidence));
     int baseline = 0;
     const cv::Size text_size =
       cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
@@ -587,8 +596,8 @@ void VisionVideoNode::processFrame()
     if (estimatePose(best, rvec, tvec)) {
       publishPose(rvec, tvec);
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 250,
-        "FPS=%.2f | %zu obj, best[class=%d conf=%.2f] pose(x=%.3f y=%.3f z=%.3f) m",
-        fps_, detections.size(), best.class_id, best.confidence,
+        "FPS=%.2f | %zu obj, best[%s conf=%.2f] pose(x=%.3f y=%.3f z=%.3f) m",
+        fps_, detections.size(), className(best.class_id).c_str(), best.confidence,
         tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
     } else {
       publishLostPose();

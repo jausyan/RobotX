@@ -43,4 +43,5 @@ vision_video_node:
     use_openvino: true
     openvino_device: "CPU"           # laptop: no NPU (drone NUC14 uses "NPU")
     openvino_model_path: ""
+    class_names: ["black_buoy", "blue_buoy", "blue_circle", "green_buoy", "green_circle", "red_buoy", "red_circle"]   # index = model class id (empty = show class=<id>)
 
