@@ -41,11 +41,11 @@
 
       # Task 2 & 3: delivery
       usv_alt: 15.0               
-      approach_alt: 8.0          
+      approach_alt: 4.0          
       drop_alt: 2.0
 
     rangefinder_param:
-      centering_alt_1: 4.5
+      centering_alt_1: 4.0
       centering_alt_2: 1.5
       centering_alt_3: 1.0
 
