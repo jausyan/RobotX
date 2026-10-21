@@ -2179,13 +2179,13 @@ void rotateByDegrees(const std::shared_ptr<DroneController>&node, rclcpp::Rate &
     Rotate(node, rate, posee, radians);
 }
 
-void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_alt, float tolerance, float timeout) {
+void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_alt, float step, float tolerance, float timeout) {
     geometry_msgs::msg::PoseStamped curr_pose = node->getCurrentLocalPose();
     float current_alt = curr_pose.pose.position.z;
     float alt_diff = req_alt - current_alt;
 
-    RCLCPP_INFO(node->get_logger(), "=== fix_alt === current: %.3f m | requested: %.3f m | diff: %.3f m",
-                current_alt, req_alt, alt_diff);
+    RCLCPP_INFO(node->get_logger(), "=== fix_alt === current: %.3f m | requested: %.3f m | diff: %.3f m | step: %.2f m",
+                current_alt, req_alt, alt_diff, step);
 
     if (std::fabs(alt_diff) < tolerance) {
         RCLCPP_INFO(node->get_logger(), "fix_alt: already at requested altitude (diff=%.3f m)", alt_diff);
@@ -2193,38 +2193,51 @@ void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, ge
         return;
     }
 
-    // Hold XY, only change Z to req_alt
+    // Hold XY, only change Z: req_alt in steps of `step` m, next step when the current one is reached
     geometry_msgs::msg::PoseStamped target_pose = curr_pose;
-    target_pose.pose.position.z = req_alt;
+    float step_z = current_alt;
 
     rclcpp::Rate fast_rate(20.0);
-    auto start_time = node->now();
     const rclcpp::Duration timeout_dur = rclcpp::Duration::from_seconds(timeout);
     bool reached = false;
 
     while (rclcpp::ok()) {
-        float current_z = node->getCurrentLocalPose().pose.position.z;
-        float remaining = std::fabs(req_alt - current_z);
+        step_z = (step > 0.0f && std::fabs(req_alt - step_z) > step)
+                 ? step_z + std::copysign(step, req_alt - step_z) : req_alt;
+        target_pose.pose.position.z = step_z;
+        RCLCPP_INFO(node->get_logger(), "fix_alt: step -> %.3f m (target %.3f m)", step_z, req_alt);
 
-        RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
-            "fix_alt: z=%.3f m | target=%.3f m | diff=%.3f m", current_z, req_alt, req_alt - current_z);
+        auto start_time = node->now();
+        bool step_reached = false;
+        while (rclcpp::ok()) {
+            float current_z = node->getCurrentLocalPose().pose.position.z;
 
-        if (remaining <= tolerance) {
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
+                "fix_alt: z=%.3f m | step=%.3f m | target=%.3f m", current_z, step_z, req_alt);
+
+            if (std::fabs(step_z - current_z) <= tolerance) {
+                step_reached = true;
+                break;
+            }
+
+            if ((node->now() - start_time) > timeout_dur) {
+                RCLCPP_WARN(node->get_logger(), "fix_alt: step timeout after %.1f s", timeout);
+                break;
+            }
+
+            target_pose.header.stamp = node->now();
+            target_pose.header.frame_id = "map";
+            node->publishLocalPosition(target_pose);
+
+            rclcpp::spin_some(node);
+            fast_rate.sleep();
+        }
+
+        if (!step_reached) break;
+        if (step_z == req_alt) {
             reached = true;
             break;
         }
-
-        if ((node->now() - start_time) > timeout_dur) {
-            RCLCPP_WARN(node->get_logger(), "fix_alt: timeout after %.1f s", timeout);
-            break;
-        }
-
-        target_pose.header.stamp = node->now();
-        target_pose.header.frame_id = "map";
-        node->publishLocalPosition(target_pose);
-
-        rclcpp::spin_some(node);
-        fast_rate.sleep();
     }
 
     if (reached) {
@@ -2234,44 +2247,60 @@ void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, ge
     posee = node->getCurrentLocalPose();
 }
 
-void fix_alt_range(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_range, float tolerance, float timeout) {
-    RCLCPP_INFO(node->get_logger(), "=== fix_alt_range === range: %.3f m | requested: %.3f m",
-                node->getCurrentRangefinder().range, req_range);
+void fix_alt_range(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_range, float step, float tolerance, float timeout) {
+    sensor_msgs::msg::Range rf = node->getCurrentRangefinder();
+    bool valid = rf.range > rf.min_range && rf.range < rf.max_range;
+    RCLCPP_INFO(node->get_logger(), "=== fix_alt_range === range: %.3f m%s | requested: %.3f m | step: %.2f m",
+                rf.range, valid ? "" : " (invalid)", req_range, step);
 
-    // Hold XY, only change Z
+    // Hold XY, only change Z: the wanted range moves to req_range in steps of `step` m
     geometry_msgs::msg::PoseStamped target_pose = node->getCurrentLocalPose();
+    float step_range = valid ? rf.range : req_range;
 
     rclcpp::Rate fast_rate(20.0);
-    auto start_time = node->now();
     const rclcpp::Duration timeout_dur = rclcpp::Duration::from_seconds(timeout);
     bool reached = false;
 
     while (rclcpp::ok()) {
-        sensor_msgs::msg::Range rf = node->getCurrentRangefinder();
-        float current_z = node->getCurrentLocalPose().pose.position.z;
-        bool valid = rf.range > rf.min_range && rf.range < rf.max_range;
-        float diff = req_range - rf.range;
+        step_range = (step > 0.0f && std::fabs(req_range - step_range) > step)
+                     ? step_range + std::copysign(step, req_range - step_range) : req_range;
+        RCLCPP_INFO(node->get_logger(), "fix_alt_range: step -> %.3f m (target %.3f m)", step_range, req_range);
 
-        RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
-            "fix_alt_range: range=%.3f m | target=%.3f m | diff=%.3f m%s", rf.range, req_range, diff, valid ? "" : " (invalid, holding)");
+        auto start_time = node->now();
+        bool step_reached = false;
+        while (rclcpp::ok()) {
+            rf = node->getCurrentRangefinder();
+            float current_z = node->getCurrentLocalPose().pose.position.z;
+            valid = rf.range > rf.min_range && rf.range < rf.max_range;
+            float diff = step_range - rf.range;
 
-        if (valid && std::fabs(diff) <= tolerance) {
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500,
+                "fix_alt_range: range=%.3f m | step=%.3f m | target=%.3f m%s", rf.range, step_range, req_range, valid ? "" : " (invalid, holding)");
+
+            if (valid && std::fabs(diff) <= tolerance) {
+                step_reached = true;
+                break;
+            }
+
+            if ((node->now() - start_time) > timeout_dur) {
+                RCLCPP_WARN(node->get_logger(), "fix_alt_range: step timeout after %.1f s", timeout);
+                break;
+            }
+
+            if (valid) target_pose.pose.position.z = current_z + diff;
+            target_pose.header.stamp = node->now();
+            target_pose.header.frame_id = "map";
+            node->publishLocalPosition(target_pose);
+
+            rclcpp::spin_some(node);
+            fast_rate.sleep();
+        }
+
+        if (!step_reached) break;
+        if (step_range == req_range) {
             reached = true;
             break;
         }
-
-        if ((node->now() - start_time) > timeout_dur) {
-            RCLCPP_WARN(node->get_logger(), "fix_alt_range: timeout after %.1f s", timeout);
-            break;
-        }
-
-        if (valid) target_pose.pose.position.z = current_z + diff;
-        target_pose.header.stamp = node->now();
-        target_pose.header.frame_id = "map";
-        node->publishLocalPosition(target_pose);
-
-        rclcpp::spin_some(node);
-        fast_rate.sleep();
     }
 
     if (reached) {
