@@ -41,7 +41,7 @@
 
       # Task 2 & 3: delivery
       usv_alt: 15.0               
-      approach_alt: 4.0          
+      approach_alt: 1.0          
       drop_alt: 2.0
       alt_step: 0.3               # fix_alt / fix_alt_range: m per step (smaller = slower, safer descend; 0 = one go)
 
@@ -81,8 +81,8 @@
       hover_pitch: 0.0
       hover_roll: 0.0
       recovery_method: "local_pose"
-      centering_tolerance_first: 0.15 
-      centering_tolerance_second: 0.10        
+      centering_tolerance_first: 0.08 
+      centering_tolerance_second: 0.05        
       hold_kp: 1.2
       detect_timeout: 0.4 
 

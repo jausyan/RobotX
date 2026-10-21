@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);
         fix_alt_range(node, rate, posee, centering_alt_3, alt_step, 0.3, 30.0);
         if (centered) {
-            controlServoRepeated(node, 15, servo_buka, signal_repeat);
+            controlServoRepeated(node, 1, servo_buka, signal_repeat);
             holdPosition(node, rate, posee, hold_time);
         } else {
             RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");

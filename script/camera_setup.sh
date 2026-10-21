@@ -10,8 +10,8 @@
 
 CAM="${CAM:-/dev/video0}"
 EXPOSURE="${EXPOSURE:-150}"        # x 100 us -> 60 = 6 ms (daylight). Darker: 100-150. Shorter = less motion blur
-GAIN_PCT="${GAIN_PCT:-25}"        # % of the camera's gain range. Raise when too dark with a short exposure
-WB_TEMP="${WB_TEMP:-5000}"        # K, fixed white balance (daylight ~5000-5500)
+GAIN_PCT="${GAIN_PCT:-6}"        # % of the camera's gain range. Raise when too dark with a short exposure
+WB_TEMP="${WB_TEMP:-5500}"        # K, fixed white balance (daylight ~5000-5500)
 FOCUS="${FOCUS:-0}"               # C922: 0 = infinity (far). Fixed-focus cameras: skipped
 POWER_LINE="${POWER_LINE:-1}"     # 0 = off, 1 = 50 Hz (Indonesia / Singapore), 2 = 60 Hz
 
