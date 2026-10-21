@@ -43,6 +43,7 @@
       usv_alt: 15.0               
       approach_alt: 4.0          
       drop_alt: 2.0
+      alt_step: 0.5               # fix_alt / fix_alt_range: m per step (smaller = slower, safer descend; 0 = one go)
 
     rangefinder_param:
       centering_alt_1: 4.0

@@ -17,6 +17,7 @@ float survey_time;
 float usv_alt;
 float approach_alt;
 float drop_alt;
+float alt_step;
 std::string order_topic;
 std::string usv_gps_topic;
 float command_timeout;
@@ -77,6 +78,7 @@ int main(int argc, char **argv) {
     node->declare_parameter<float>("mission.usv_alt", 10.0);
     node->declare_parameter<float>("mission.approach_alt", 10.0);
     node->declare_parameter<float>("mission.drop_alt", 3.0);
+    node->declare_parameter<float>("mission.alt_step", 0.5);
     node->declare_parameter<std::string>("communication.order_topic", "/mission/order");
     node->declare_parameter<std::string>("communication.usv_gps_topic", "/USV/global_position/global");
     node->declare_parameter<float>("communication.command_timeout", 600.0);
@@ -124,6 +126,7 @@ int main(int argc, char **argv) {
     node->get_parameter("mission.usv_alt", usv_alt);
     node->get_parameter("mission.approach_alt", approach_alt);
     node->get_parameter("mission.drop_alt", drop_alt);
+    node->get_parameter("mission.alt_step", alt_step);
     node->get_parameter("communication.order_topic", order_topic);
     node->get_parameter("communication.usv_gps_topic", usv_gps_topic);
     node->get_parameter("communication.command_timeout", command_timeout);
@@ -162,7 +165,7 @@ int main(int argc, char **argv) {
     }
     RCLCPP_INFO(node->get_logger(), "ORDER TOPIC : %s", order_topic.c_str());
     RCLCPP_INFO(node->get_logger(), "USV TOPIC   : %s", usv_gps_topic.c_str());
-    RCLCPP_INFO(node->get_logger(), "DROP        : approach %.1f m, drop %.1f m", approach_alt, drop_alt);
+    RCLCPP_INFO(node->get_logger(), "DROP        : approach %.1f m, drop %.1f m, alt step %.2f m", approach_alt, drop_alt, alt_step);
 
     size_t wp_needed = 0;
     if (use_task_1) wp_needed = std::max<size_t>(wp_needed, 1);   // survey_lat[0]
@@ -269,12 +272,12 @@ int main(int argc, char **argv) {
         order = parseCommand(command);
         target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
         RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s --> %s", order.circle.c_str(), target.c_str());
-        fix_alt(node, rate, posee, approach_alt);
-        fix_alt_range(node, rate, posee, centering_alt_1, 0.3, 30.0);
+        fix_alt(node, rate, posee, approach_alt, alt_step);
+        fix_alt_range(node, rate, posee, centering_alt_1, alt_step, 0.3, 30.0);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
-        fix_alt_range(node, rate, posee, centering_alt_2, 0.3, 30.0);
+        fix_alt_range(node, rate, posee, centering_alt_2, alt_step, 0.3, 30.0);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);
-        fix_alt_range(node, rate, posee, centering_alt_3, 0.3, 30.0);
+        fix_alt_range(node, rate, posee, centering_alt_3, alt_step, 0.3, 30.0);
         if (centered) {
             controlServoRepeated(node, 15, servo_buka, signal_repeat);
             holdPosition(node, rate, posee, hold_time);
@@ -299,7 +302,7 @@ int main(int argc, char **argv) {
         holdPosition(node, rate, posee, hold_time);
 
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
-        fix_alt(node, rate, posee, drop_alt);
+        fix_alt(node, rate, posee, drop_alt, alt_step);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);
         if (centered) {
             channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
@@ -308,11 +311,11 @@ int main(int argc, char **argv) {
         } else {
             RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
         }
-        fix_alt(node, rate, posee, takeoff_altitude);
+        fix_alt(node, rate, posee, takeoff_altitude, alt_step);
 
         target_circle = "circle_" + order.circle;
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target_circle);
-        fix_alt(node, rate, posee, drop_alt);
+        fix_alt(node, rate, posee, drop_alt, alt_step);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target_circle);
         if (centered) {
             channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
