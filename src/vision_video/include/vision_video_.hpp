@@ -60,6 +60,7 @@ private:
 
   void openInputSource();
   void updateFps();
+  std::string className(int class_id) const;
   void drawDetections(cv::Mat & frame, const std::vector<Detection> & detections) const;
   void drawCrosshair(cv::Mat & frame) const;
   void displayFrame(cv::Mat & frame, const std::vector<Detection> & detections);
@@ -99,6 +100,7 @@ private:
   bool use_openvino_;
   std::string openvino_device_;
   std::string openvino_model_path_;
+  std::vector<std::string> class_names_;   // index = model class id
   double object_width_m_;
   double object_height_m_;
   std::string pose_frame_id_;

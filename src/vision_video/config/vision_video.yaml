@@ -1,7 +1,7 @@
 vision_video_node:
   ros__parameters:
     input_mode: "device"
-    input_source: "/dev/video0"
+    input_source: "/dev/video2"
     model_path: "/home/robotx/RobotX/models/V7.onnx"
     input_width: 640
     input_height: 640
@@ -45,4 +45,5 @@ vision_video_node:
     use_openvino: true
     openvino_device: "NPU"
     openvino_model_path: ""
+    class_names: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"]   # index = model class id (empty = show class=<id>)
 
