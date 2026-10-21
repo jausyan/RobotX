@@ -1,13 +1,13 @@
 vision_video_node:
   ros__parameters:
     input_mode: "device"
-    input_source: "/dev/video0"
-    model_path: "/home/robotx/RobotX/models/V7.onnx"
+    input_source: "/dev/video2"
+    model_path: "/home/robotx/RobotX/models/V6.onnx"
     input_width: 640
     input_height: 640
     letterbox: true                
-    camera_width: 640 #1280
-    camera_height: 480 #720
+    camera_width: 1280
+    camera_height: 720
     camera_fourcc: "MJPG"
     camera_fps: 30
     conf_threshold: 0.4
@@ -24,20 +24,24 @@ vision_video_node:
     #                 0.0, 506.13168687, 243.99035432,
     #                 0.0, 0.0, 1.0]
     # distortion_coeffs: [0.07771398, -0.18711237, -0.00182709, 0.00026326, -0.06212367]
-    camera_matrix: [595.49236732, 0.0, 319.25863089,
-                    0.0, 592.95298486, 230.27268846,
+    camera_matrix: [780.34077467, 0.0, 627.30512461,
+                    0.0, 781.00196069, 360.89210470,
                     0.0, 0.0, 1.0]
-    distortion_coeffs: [-0.52292437, 0.30212636, 0.00376494, 0.00482483, 0.05953942]
+    distortion_coeffs: [0.09120087, -0.23587060, -0.00022991, -0.00292250, 0.10943167]
     object_width_m: 0.3
     object_height_m: 0.3
     pose_frame_id: "camera"
+    offset_x_m: 0.0                 # added to the pose [m, camera frame] — shifts the centering point
+    offset_y_m: 0.0
+    offset_z_m: 0.0
+    crosshair_offset_y_px: 0        # moves the drawn horizontal crosshair line [px, + = down]
     show_window: false
     window_name: "vision_video_detection"
     enable_stream: true
-    stream_host: "192.168.0.115"
+    stream_host: "10.7.101.80"
     stream_port: 5000
-    stream_width: 640 #1280 #848 
-    stream_height: 480 #720 #480
+    stream_width: 1280 #848 
+    stream_height: 720 #480
     stream_fps: 15
     stream_bitrate_kbps: 2000
     stream_undistort: false         
@@ -45,4 +49,5 @@ vision_video_node:
     use_openvino: true
     openvino_device: "NPU"
     openvino_model_path: ""
+    class_names: ["buoy_blue", "buoy_green", "buoy_red"]   # V6.onnx  (V7.onnx: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"])
 
