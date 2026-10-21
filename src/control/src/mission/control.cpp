@@ -219,11 +219,22 @@ int main(int argc, char **argv) {
         rclcpp::shutdown();
         return 0;
     }
-    RCLCPP_INFO(node->get_logger(), "PRE-RUN: ON THE GROUND, WAITING FOR RUN START...");
-    if (!waitCommand(node, "RUN-START", order_topic, run_start_timeout, false)) {
-        RCLCPP_ERROR(node->get_logger(), "=========== NO RUN START, ABORT (drone not armed) ===========");
-        rclcpp::shutdown();
-        return 1;
+    // start from task 2 (task 1 off): take off on the UAV-GO:<TIN>:<CIRCLE> order itself, no RUN-START
+    const bool start_task_2 = use_task_2 && !use_task_1;
+    if (start_task_2) {
+        RCLCPP_INFO(node->get_logger(), "PRE-RUN: ON THE GROUND, WAITING FOR UAV-GO:<TIN>:<CIRCLE> (start from task 2)...");
+        if (!waitCommand(node, "UAV-GO:", order_topic, run_start_timeout, false, &command)) {
+            RCLCPP_ERROR(node->get_logger(), "=========== NO UAV-GO ORDER, ABORT (drone not armed) ===========");
+            rclcpp::shutdown();
+            return 1;
+        }
+    } else {
+        RCLCPP_INFO(node->get_logger(), "PRE-RUN: ON THE GROUND, WAITING FOR RUN START...");
+        if (!waitCommand(node, "RUN-START", order_topic, run_start_timeout, false)) {
+            RCLCPP_ERROR(node->get_logger(), "=========== NO RUN START, ABORT (drone not armed) ===========");
+            rclcpp::shutdown();
+            return 1;
+        }
     }
 
     RCLCPP_INFO(node->get_logger(), "TAKING OFF.... %.2f meters...", takeoff_altitude);
@@ -268,7 +279,7 @@ int main(int argc, char **argv) {
         waitForWP(node, rate, 1);
         setMode(node, rate, "GUIDED");
         holdPosition(node, rate, posee, hold_time);
-        waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);
+        if (!start_task_2) waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);   // start_task_2: order already received on the ground
         order = parseCommand(command);
         target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
         RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s --> %s", order.circle.c_str(), target.c_str());
