@@ -1,17 +1,19 @@
 vision_geo_node:
   ros__parameters:
-    input_mode: "file"          
-    input_source: "/home/robotx/RobotX/video/4.mp4"
+    input_mode: "device"          
+    input_source: "/dev/video0"
     use_camera_info: false
     camera_info_topic: "/iris_with_camera_2/camera/camera_info"
     # camera_matrix: [612.23832801, 0.0, 292.50879046,
     #                 0.0, 612.89511564, 229.65043225,
     #                 0.0, 0.0, 1.0]
     # distortion_coeffs: [-0.49151925, 0.36591033, 0.00508743, 0.00177489, -0.26990208]
-    camera_matrix: [612.23832801, 0.0, 292.50879046, 0.0, 612.89511564, 229.65043225, 0.0, 0.0, 1.0]
-    distortion_coeffs: [-0.49151925, 0.36591033, 0.00508743, 0.00177489, -0.26990208]
+    # camera_matrix: [612.23832801, 0.0, 292.50879046, 0.0, 612.89511564, 229.65043225, 0.0, 0.0, 1.0]
+    # distortion_coeffs: [-0.49151925, 0.36591033, 0.00508743, 0.00177489, -0.26990208]
+    camera_matrix: [595.49236732, 0.0, 319.25863089, 0.0, 592.95298486, 230.27268846, 0.0, 0.0, 1.0]
+    distortion_coeffs: [-0.52292437, 0.30212636, 0.00376494, 0.00482483, 0.05953942]
     cam_to_body_rpy: [180.0, 0.0, -90.0]
-    model_path: "/home/robotx/RobotX/models/V6.onnx"
+    model_path: "/home/robotx/RobotX/models/V7.onnx"
     input_width: 640
     input_height: 640
     letterbox: true                 
@@ -25,7 +27,8 @@ vision_geo_node:
     openvino_device: "NPU"
     openvino_model_path: ""        
     # class_names:   ["buoy_red", "buoy_blue", "circle_blue", "buoy_green", "circle_green", "buoy_black", "circle_red"]
-    class_names:   ["buoy_blue", "buoy_green", "buoy_red", "buoy_green", "circle_green", "circle_blue", "circle_red"]
+    # class_names:   ["buoy_blue", "buoy_green", "buoy_red", "buoy_green", "circle_green", "circle_blue", "circle_red"]
+    class_names: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"]
     object_size_m: [0.4,        0.4,          0.4,         0.4,        0.65,         0.65,           0.65]  
     gps_topic:     "/rian/global_position/global"     
     pose_topic:    "/rian/local_position/pose"
@@ -60,7 +63,7 @@ vision_geo_node:
     show_window: false
     window_name: "vision_geo"
     enable_stream: true
-    stream_host: "100.95.74.67"         
+    stream_host: "192.168.0.115"         
     stream_port: 5000
     stream_width: 640
     stream_height: 480
@@ -73,7 +76,7 @@ vision_geo_node:
     target_topic_prefix: "/vision_geo/target/"   
     map_topic_prefix:    "/vision_geo/map/"      
     pose_frame_id: "camera"
-    offset_x_m: 0.0                 # [m] added to /target poses (camera frame: x right, y down, z forward)
-    offset_y_m: 0.0                 #     → shifts where centering_red() puts the target
+    offset_x_m: 0.0                 
+    offset_y_m: 0.0                 
     offset_z_m: 0.0
-    crosshair_offset_y_px: 0        # [px] moves the drawn crosshair line (display / stream only)
+    crosshair_offset_y_px: 90       
