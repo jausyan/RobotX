@@ -31,6 +31,10 @@ vision_video_node:
     object_width_m: 0.3
     object_height_m: 0.3
     pose_frame_id: "camera"
+    offset_x_m: 0.0                 # added to the pose [m, camera frame] — shifts the centering point
+    offset_y_m: 0.0
+    offset_z_m: 0.0
+    crosshair_offset_y_px: 0        # moves the drawn horizontal crosshair line [px, + = down]
     show_window: false
     window_name: "vision_video_detection"
     enable_stream: true
@@ -45,5 +49,5 @@ vision_video_node:
     use_openvino: true
     openvino_device: "NPU"
     openvino_model_path: ""
-    class_names: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"]   # index = model class id (empty = show class=<id>)
+    class_names: ["buoy_blue", "buoy_green", "buoy_red"]   # V6.onnx  (V7.onnx: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"])
 

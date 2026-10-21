@@ -104,6 +104,10 @@ private:
   double object_width_m_;
   double object_height_m_;
   std::string pose_frame_id_;
+  double offset_x_m_ = 0.0;             // added to the published pose (camera frame) — shifts the centering point
+  double offset_y_m_ = 0.0;
+  double offset_z_m_ = 0.0;
+  int    crosshair_offset_y_px_ = 0;    // moves the drawn horizontal crosshair line (display / stream only)
   bool use_camera_info_ = false;
   std::string camera_info_topic_;
   bool camera_info_received_ = false;

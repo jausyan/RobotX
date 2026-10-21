@@ -38,6 +38,10 @@ VisionVideoNode::VisionVideoNode()
   object_width_m_ = declare_parameter<double>("object_width_m", 0.3);
   object_height_m_ = declare_parameter<double>("object_height_m", 0.3);
   pose_frame_id_ = declare_parameter<std::string>("pose_frame_id", "camera");
+  offset_x_m_ = declare_parameter<double>("offset_x_m", 0.0);
+  offset_y_m_ = declare_parameter<double>("offset_y_m", 0.0);
+  offset_z_m_ = declare_parameter<double>("offset_z_m", 0.0);
+  crosshair_offset_y_px_ = declare_parameter<int>("crosshair_offset_y_px", 0);
 
   if (use_camera_info_) {
     camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
@@ -357,9 +361,9 @@ void VisionVideoNode::publishPose(const cv::Mat & rvec, const cv::Mat & tvec)
   geometry_msgs::msg::PoseStamped msg;
   msg.header.stamp = now();
   msg.header.frame_id = pose_frame_id_;
-  msg.pose.position.x = tvec.at<double>(0);
-  msg.pose.position.y = tvec.at<double>(1);
-  msg.pose.position.z = tvec.at<double>(2);
+  msg.pose.position.x = tvec.at<double>(0) + offset_x_m_;
+  msg.pose.position.y = tvec.at<double>(1) + offset_y_m_;
+  msg.pose.position.z = tvec.at<double>(2) + offset_z_m_;
 
   cv::Mat R;
   cv::Rodrigues(rvec, R);
@@ -456,7 +460,7 @@ void VisionVideoNode::drawDetections(cv::Mat & frame, const std::vector<Detectio
 void VisionVideoNode::drawCrosshair(cv::Mat & frame) const
 {
   int center_x = frame.cols / 2;
-  int center_y = frame.rows / 2;
+  int center_y = std::clamp(frame.rows / 2 + crosshair_offset_y_px_, 0, frame.rows - 1);
   cv::Scalar green(0, 255, 0);
   cv::line(frame, cv::Point(0, center_y), cv::Point(frame.cols, center_y), green, 1);
   cv::line(frame, cv::Point(center_x, 0), cv::Point(center_x, frame.rows), green, 1);
