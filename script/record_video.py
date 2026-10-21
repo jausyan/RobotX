@@ -16,6 +16,12 @@ Usage:
     python3 record_video.py --no-undistort   # raw frames (same as vision_video input)
     python3 record_video.py --duration 60    # stop after 60 s
     python3 record_video.py --output out.avi # custom filename
+    python3 record_video.py --width 1280 --height 720 --fourcc MJPG   # camera mode (default: driver default)
+    python3 record_video.py --stream-host 192.168.0.99                # also stream to GStreamer (H.264 RTP/UDP)
+
+Stream receiver (same as vision_geo / vision_video stream):
+    gst-launch-1.0 udpsrc port=5000 caps="application/x-rtp,media=video,encoding-name=H264,payload=96" \
+        ! rtph264depay ! avdec_h264 ! videoconvert ! autovideosink sync=false
 
 Output saved to: <script folder>/video/
 Press Ctrl+C to stop.
@@ -36,6 +42,7 @@ VIDEO_DIR  = SCRIPT_DIR / "video"
 
 # ── Camera calibration — from vision_video.yaml ──────────────────────────────
 # Calibrated at 640×480 (native camera resolution)
+CALIB_SIZE = (640, 480)
 CAMERA_MATRIX = np.array([
     [504.99132615,   0.0,         318.4012728 ],
     [  0.0,        506.13168687,  243.99035432],
@@ -60,6 +67,16 @@ def parse_args():
                    help="Max recording seconds (0 = unlimited)")
     p.add_argument("--no-undistort", action="store_true",
                    help="Save raw frames without undistortion (same as vision_video input)")
+    p.add_argument("--width",        type=int, default=0,
+                   help="Camera width  (0 = driver default), e.g. 640 / 1280")
+    p.add_argument("--height",       type=int, default=0,
+                   help="Camera height (0 = driver default), e.g. 480 / 720")
+    p.add_argument("--fourcc",       default="",
+                   help="Camera pixel format, e.g. MJPG (needed for 720p @ 30 fps); empty = driver default")
+    p.add_argument("--stream-host",  default="",
+                   help="Also stream the recorded frames to this host (H.264 RTP/UDP); empty = no stream")
+    p.add_argument("--stream-port",  type=int, default=5000)
+    p.add_argument("--stream-bitrate", type=int, default=2000, help="Stream bitrate [kbps]")
     return p.parse_args()
 
 
@@ -81,15 +98,29 @@ def main():
         print(f"[ERROR] Cannot open camera: {dev}")
         sys.exit(1)
 
-    # Read actual resolution (do NOT force width/height — match vision_video)
+    # Camera mode: same as vision_video camera_fourcc / camera_width / camera_height
+    if args.fourcc:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*args.fourcc))
+    if args.width > 0:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+    if args.height > 0:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+
+    # Actual resolution (the driver picks the nearest mode it supports)
     w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     print(f"[INFO] Device       : {dev}  ({w}x{h} @ {fps:.0f} fps)")
+    if (args.width and args.width != w) or (args.height and args.height != h):
+        print(f"[WARN] Asked {args.width}x{args.height}, camera gives {w}x{h}")
 
     # ── Pre-compute undistortion maps (once) ──────────────────────────────────
-    if not args.no_undistort:
+    if not args.no_undistort and (w, h) != CALIB_SIZE:
+        # calibration is for 640x480; other modes have a different field of view
+        print(f"[WARN] Undistort    : OFF  (calibrated at {CALIB_SIZE[0]}x{CALIB_SIZE[1]}, camera is {w}x{h})")
+        map1 = map2 = None
+    elif not args.no_undistort:
         # alpha=0 → no black borders (crops to valid pixels)
         new_K, roi = cv2.getOptimalNewCameraMatrix(
             CAMERA_MATRIX, DIST_COEFFS, (w, h), alpha=0, newImgSize=(w, h)
@@ -120,6 +151,25 @@ def main():
         sys.exit(1)
 
     print(f"[INFO] Output       : {out_path}")
+
+    # ── GStreamer stream (same pipeline as vision_geo / vision_video) ─────────
+    stream = None
+    if args.stream_host:
+        fps_i = max(1, int(round(fps)))
+        pipeline = (
+            "appsrc is-live=true do-timestamp=true format=time ! "
+            f"video/x-raw,format=BGR,width={w},height={h},framerate={fps_i}/1 ! "
+            "videoconvert ! "
+            f"x264enc tune=zerolatency bitrate={args.stream_bitrate} speed-preset=superfast key-int-max={fps_i} byte-stream=true ! "
+            "rtph264pay config-interval=1 pt=96 ! "
+            f"udpsink host={args.stream_host} port={args.stream_port} sync=false async=false")
+        stream = cv2.VideoWriter(pipeline, cv2.CAP_GSTREAMER, 0, float(fps_i), (w, h), True)
+        if not stream.isOpened():
+            print(f"[ERROR] Cannot open GStreamer stream. Pipeline: {pipeline}")
+            cap.release()
+            writer.release()
+            sys.exit(1)
+        print(f"[INFO] Stream       : udp://{args.stream_host}:{args.stream_port}  ({w}x{h} @ {fps_i} fps, {args.stream_bitrate} kbps)")
     print(f"[INFO] Duration     : {'unlimited' if args.duration == 0 else str(args.duration) + 's'}")
     print("[INFO] Recording … Ctrl+C to stop\n")
 
@@ -150,6 +200,8 @@ def main():
             frame = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
 
         writer.write(frame)
+        if stream is not None:
+            stream.write(frame)
         frames  += 1
         elapsed  = time.time() - t0
 
@@ -163,6 +215,8 @@ def main():
 
     cap.release()
     writer.release()
+    if stream is not None:
+        stream.release()
 
     elapsed = time.time() - t0
     size_mb = out_path.stat().st_size / 1e6 if out_path.exists() else 0
