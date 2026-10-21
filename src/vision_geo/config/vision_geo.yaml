@@ -1,7 +1,7 @@
 vision_geo_node:
   ros__parameters:
     input_mode: "device"          
-    input_source: "/dev/video0"
+    input_source: "/dev/video2"
     use_camera_info: false
     camera_info_topic: "/iris_with_camera_2/camera/camera_info"
     # camera_matrix: [612.23832801, 0.0, 292.50879046,
@@ -19,8 +19,8 @@ vision_geo_node:
     input_width: 640
     input_height: 640
     letterbox: true                 
-    camera_width: 1920
-    camera_height: 1080
+    camera_width: 1280
+    camera_height: 720
     camera_fourcc: "MJPG"
     camera_fps: 30
     conf_threshold: 0.4
@@ -65,10 +65,10 @@ vision_geo_node:
     show_window: false
     window_name: "vision_geo"
     enable_stream: true
-    stream_host: "192.168.0.115"         
+    stream_host: "10.7.101.205"         
     stream_port: 5000
-    stream_width: 1920
-    stream_height: 1080
+    stream_width: 1280
+    stream_height: 720
     stream_fps: 15
     stream_bitrate_kbps: 2000
     stream_undistort: false         

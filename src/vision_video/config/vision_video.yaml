@@ -2,12 +2,12 @@ vision_video_node:
   ros__parameters:
     input_mode: "device"
     input_source: "/dev/video2"
-    model_path: "/home/robotx/RobotX/models/V7.onnx"
+    model_path: "/home/robotx/RobotX/models/V6.onnx"
     input_width: 640
     input_height: 640
     letterbox: true                
-    camera_width: 640 #1280
-    camera_height: 480 #720
+    camera_width: 1280
+    camera_height: 720
     camera_fourcc: "MJPG"
     camera_fps: 30
     conf_threshold: 0.4
@@ -34,10 +34,10 @@ vision_video_node:
     show_window: false
     window_name: "vision_video_detection"
     enable_stream: true
-    stream_host: "192.168.0.115"
+    stream_host: "10.7.101.80"
     stream_port: 5000
-    stream_width: 640 #1280 #848 
-    stream_height: 480 #720 #480
+    stream_width: 1280 #848 
+    stream_height: 720 #480
     stream_fps: 15
     stream_bitrate_kbps: 2000
     stream_undistort: false         
