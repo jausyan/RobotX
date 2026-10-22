@@ -83,4 +83,5 @@ vision_geo_node:
     offset_x_m: 0.0                 
     offset_y_m: 0.0                 
     offset_z_m: 0.0
+    crosshair_offset_x_px: 0          # [px] moves the drawn vertical crosshair line (+ = right; display / stream only)
     crosshair_offset_y_px: 190       

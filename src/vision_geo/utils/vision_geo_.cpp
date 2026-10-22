@@ -114,6 +114,7 @@ VisionGeoNode::VisionGeoNode()
   offset_x_m_          = declare_parameter<double>("offset_x_m", 0.0);
   offset_y_m_          = declare_parameter<double>("offset_y_m", 0.0);
   offset_z_m_          = declare_parameter<double>("offset_z_m", 0.0);
+  crosshair_offset_x_px_ = declare_parameter<int>("crosshair_offset_x_px", 0);
   crosshair_offset_y_px_ = declare_parameter<int>("crosshair_offset_y_px", 0);
   if (object_size_m_.empty()) object_size_m_.push_back(0.5);
   // classes that get GPS projection + map (Task 1); the rest only get a target pose
@@ -2101,9 +2102,10 @@ void VisionGeoNode::updateFps()
 void VisionGeoNode::drawCrosshair(cv::Mat & frame) const
 {
   const cv::Scalar green(0, 255, 0);
+  const int center_x = std::clamp(frame.cols / 2 + crosshair_offset_x_px_, 0, frame.cols - 1);
   const int center_y = std::clamp(frame.rows / 2 + crosshair_offset_y_px_, 0, frame.rows - 1);
   cv::line(frame, {0, center_y}, {frame.cols, center_y}, green, 1);
-  cv::line(frame, {frame.cols / 2, 0}, {frame.cols / 2, frame.rows}, green, 1);
+  cv::line(frame, {center_x, 0}, {center_x, frame.rows}, green, 1);
 }
 
 void VisionGeoNode::drawDetections(

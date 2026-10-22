@@ -75,6 +75,7 @@ vision_geo_node:
     offset_x_m: 0.0                 # [m] added to /target poses (camera frame: x right, y down, z forward)
     offset_y_m: 0.0                 #     → shifts where centering_red() puts the target
     offset_z_m: 0.0
+    crosshair_offset_x_px: 0          # [px] moves the drawn vertical crosshair line (+ = right; display / stream only)
     crosshair_offset_y_px: 0        # [px] moves the drawn crosshair line (display / stream only)
     # buoy light state (Task 1): one map point per physical buoy, state from recent class history
     state_window_s: 6.0                   # [s] light history kept per buoy (state changes show up within this time)
