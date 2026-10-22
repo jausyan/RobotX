@@ -4,7 +4,6 @@
 /install
 /video
 /models
-/bag
 *.log
 *.bag
 *.bag.active
@@ -27,6 +26,8 @@ CLAUDE.md
 /script/calibrate_camera.py
 /script/camera_setup.sh
 /script/sharpness_test.py
+calib/*
+bag/*    
 
 # Python environment + caches (never commit: torch alone is > 400 MB)
 /.venv/
@@ -37,3 +38,8 @@ __pycache__/
 
 # trained weights (like *.onnx above)
 *.pt
+
+# colcon output built inside a package folder
+src/*/build/
+src/*/install/
+src/*/log/

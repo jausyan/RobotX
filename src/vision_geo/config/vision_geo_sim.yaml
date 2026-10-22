@@ -30,15 +30,27 @@ vision_geo_node:
     fixed_altitude_m: 15.0
     max_pose_age_ms: 500
     altitude_offset_m: 0.0        # takeoff point height above the water [m] (e.g. 1.0 from a deck)
+    camera_latency_ms: 150.0      # frame age when grabbed; pose is taken from then (tune: fly a leg both ways)
+    map_center_ratio: 0.7         # only detections in the central 70% of the image feed the map
+    edge_k: 0.0                   # edge correction: ground offset x (1 + edge_k*r^2), r 0 centre..1 corner
+    edge_k_check: true            # log the edge_k that fits buoys seen in the centre AND at the edge
+    pnp_alt_check: true           # log PnP depth vs altitude (checks rel_alt / fx)
+    mount_yaw_check: true         # log the cam_to_body_rpy yaw that matches the image motion
     output_topic:    "/vision_geo/detections"
     marker_topic:    "/vision_geo/markers"
     marker_frame_id: "map"
     marker_lifetime_s: 0.0        # 0 = permanent (stay until RViz closed), >0 = seconds
     marker_size: 0.8
     pixel_match_radius_px: 100.0  # pixel center distance to match same buoy across consecutive frames
-    track_exit_frames: 15         # missed frames before a track is dropped — keep > 1 s so a flashing light (1 s off) keeps its track
+    track_exit_frames: 25         # missed frames before a track is dropped (> a blink-off, ~1.5 s)
     min_obs_to_commit: 5          # min GPS frames accumulated before committing (rejects brief detections)
     map_merge_radius_m: 2.0       # GPS merge radius — small is safe since positions are averaged over frames
+    cluster_radius_m: 3.0         # map points closer than this = SAME buoy (keep < half the buoy spacing)
+    min_obs_publish: 30           # show / publish a buoy only after this many observations
+    max_tilt_deg: 8.0             # skip map updates while the drone leans more than this
+    obs_window: 200               # observations kept per buoy for the median position
+    enable_testing: false         # true: 1st blue buoy = entry, 2nd blue buoy = exit (no blink check)
+    survey_time: 20.0             # [s] map buoys this long after UAV-GO before publishing /vision_geo/map/buoy_* (Task 1 feedback)
     show_window: true
     window_name: "vision_geo_sim"
     # GStreamer stream (same as vision_hailo): RTP/H.264 over UDP
@@ -58,6 +70,10 @@ vision_geo_node:
     target_topic_prefix: "/vision_geo/target/"   # PoseStamped per class (solvePnP, meters, closest one) → centering_red()
     map_topic_prefix:    "/vision_geo/map/"      # + buoy_<red|green|entry|exit|off> (DetectedObjectArray, GPS)
     pose_frame_id: "camera"
+    offset_x_m: 0.0                 # [m] added to /target poses (camera frame: x right, y down, z forward)
+    offset_y_m: 0.0                 #     → shifts where centering_red() puts the target
+    offset_z_m: 0.0
+    crosshair_offset_y_px: 0        # [px] moves the drawn crosshair line (display / stream only)
     # buoy light state (Task 1): one map point per physical buoy, state from recent class history
     state_window_s: 6.0                   # [s] light history kept per buoy (state changes show up within this time)
     flash_gap_min_s: 0.6                  # [s] lit→lit gap counted as a flash (lights: 1 s on / 1 s off)

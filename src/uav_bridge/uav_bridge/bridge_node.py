@@ -30,7 +30,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import State
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rx_msgs.msg import (Command, Course, Heartbeat, LatLng, MissionStatus,
                          ResourceDelivery, SafePassage, BuoyDetection)
 from sensor_msgs.msg import NavSatFix
@@ -79,7 +79,7 @@ class UavBridge(Node):
         self.run_id = 0
         self.current_task = tr.TASK_NONE
         self.seen_cmds = set()             # (command_seq, command_type) already handled
-        self.pending = deque()             # orders waiting for "ACK:<order>"
+        self.pending = deque()             # [order, task] waiting for "ACK:<order>" (task 0 = not a delivery)
         self.go_left = 0                   # remaining "UAV-GO" sends
         self.mav = {'connected': False, 'armed': False, 'mode': '', 'fix': None,
                     'rel_alt': 0.0, 'hdg': 0.0, 'speed': 0.0, 'roll': 0.0, 'pitch': 0.0}
@@ -91,11 +91,13 @@ class UavBridge(Node):
 
         # ---- publishers ---------------------------------------------------------
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        # heartbeats are BEST_EFFORT: a stale heartbeat is useless, never wait for resends
+        heartbeat_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.order_pub = self.create_publisher(String, g('topics.order'), 10)
         self.usv_gps_pub = self.create_publisher(NavSatFix, g('topics.usv_gps'), 10)
         # latched: control may start after the GCS sent the course (it is sent once)
         self.geofence_pub = self.create_publisher(Float64MultiArray, g('topics.geofence'), latched)
-        self.hb_pub = self.create_publisher(Heartbeat, veh + '/heartbeat', 10)
+        self.hb_pub = self.create_publisher(Heartbeat, veh + '/heartbeat', heartbeat_qos)
         self.status_pub = self.create_publisher(MissionStatus, g('system.status'), 10)
         self.sp_pub = self.create_publisher(SafePassage, veh + '/task1/safe_passage', 10)
         self.delivery_pubs = {task: self.create_publisher(
@@ -107,7 +109,8 @@ class UavBridge(Node):
         # VOLATILE: the GCS publishes the course VOLATILE; a TRANSIENT_LOCAL subscriber would be
         # incompatible and receive nothing (a VOLATILE one matches both kinds of publisher)
         self.create_subscription(Course, g('system.course'), self.course_cb, 10)
-        self.create_subscription(Heartbeat, g('system.usv_heartbeat'), self.usv_cb, 10)
+        self.create_subscription(Heartbeat, g('system.usv_heartbeat'), self.usv_cb,
+                                 heartbeat_qos)
         self.create_subscription(String, g('topics.order'), self.order_cb, 10)
         self.create_subscription(UInt8, g('topics.current_task'), self.task_cb, latched)
         prefix = g('topics.buoy_map_prefix').rstrip('/') + '/'
@@ -142,7 +145,11 @@ class UavBridge(Node):
             return
         key = (msg.command_seq, msg.command_type)
         if key in self.seen_cmds:
-            return                                  # GCS re-sent the same command
+            # GCS re-sent the same command; a NEW command needs a new command_seq
+            self.get_logger().info(
+                f'Command seq {msg.command_seq} type {msg.command_type} already handled - ignored',
+                throttle_duration_sec=5.0)
+            return
         self.seen_cmds.add(key)
 
         if msg.command_type in tr.CMD_TASK4:
@@ -161,8 +168,16 @@ class UavBridge(Node):
             self.echo_delivery(msg)
 
         self.get_logger().info(f'Command seq {msg.command_seq} -> "{order}"')
+        if msg.command_type == tr.CMD_RUN_START:
+            # new run: delivery orders control never consumed belong to the old run
+            self.drop_pending(lambda o, t: t != 0, 'new run')
+        if msg.command_type == tr.CMD_DELIVERY:
+            # newest delivery for a task replaces the one still waiting for that task
+            self.drop_pending(lambda o, t: t == msg.task, f'replaced by "{order}"')
+        task = msg.task if msg.command_type == tr.CMD_DELIVERY else 0
         if tr.needs_ack(order):
-            self.pending.append(order)
+            if [order, task] not in self.pending:
+                self.pending.append([order, task])
         else:
             self.go_left = self.go_repeat
         self.resend_orders()
@@ -179,12 +194,18 @@ class UavBridge(Node):
         echo.delivery_circle_color = cmd.delivery_circle_color
         pub.publish(echo)
 
+    def drop_pending(self, match, why):
+        for order, task in [p for p in self.pending if match(*p)]:
+            self.pending.remove([order, task])
+            self.get_logger().warning(f'"{order}" dropped ({why})')
+
     def resend_orders(self):
         # kept until control sends ACK:<order>. Every non-delivery order, but only the
         # OLDEST delivery, so the Task 2 order is always consumed before the Task 3 one.
-        oldest_delivery = next((o for o in self.pending if o.startswith('UAV-GO:')), None)
-        for order in self.pending:
-            if not order.startswith('UAV-GO:') or order is oldest_delivery:
+        oldest_delivery = next((p for p in self.pending if p[1] != 0), None)
+        for p in self.pending:
+            order = p[0]
+            if p[1] == 0 or p is oldest_delivery:
                 self.order_pub.publish(String(data=order))
         if self.go_left > 0:
             self.order_pub.publish(String(data='UAV-GO'))
@@ -195,8 +216,9 @@ class UavBridge(Node):
         if not text.startswith('ACK:'):
             return
         acked = text[4:]
-        if acked in self.pending:
-            self.pending.remove(acked)
+        done = next((p for p in self.pending if p[0] == acked), None)
+        if done is not None:
+            self.pending.remove(done)
             self.get_logger().info(f'"{acked}" confirmed by control')
 
     def course_cb(self, msg):

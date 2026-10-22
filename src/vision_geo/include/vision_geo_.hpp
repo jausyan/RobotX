@@ -4,6 +4,7 @@
 #include <chrono>
 #include <deque>
 #include <map>
+#include <set>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -62,6 +63,9 @@ public:
     double alt_local = 0.0;  // pose.position.z — Up from the EKF origin
     double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
     rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+    rclcpp::Time pose_stamp{0, 0, RCL_ROS_TIME};     // arrival time of the pose (for frame matching)
+    rclcpp::Time rel_alt_stamp{0, 0, RCL_ROS_TIME};  // arrival time of rel_alt
+    bool rel_alt_valid = false;
     bool gps_valid = false;
     bool pose_valid = false;
     bool pose_z_valid = false;
@@ -72,6 +76,9 @@ public:
     double lat = 0.0, lon = 0.0, alt = 0.0;
     double north_m = 0.0, east_m = 0.0;
     bool valid = false;
+    bool center = true;   // inside map_center_ratio (edge positions are less accurate)
+    double drone_e = 0.0, drone_n = 0.0;  // drone position used for this projection
+    double r_norm = 0.0;                  // pixel distance from the principal point, 0 centre .. 1 corner
   };
 
   // Tracks a buoy currently visible in the frame (pixel space).
@@ -85,13 +92,14 @@ public:
     float       confidence = 0.0f;
     float       cx = 0.0f, cy = 0.0f;              // last pixel center
     std::vector<std::pair<double, double>> enu_buf; // (east_m, north_m) map coords, pre-link
+    std::vector<bool> enu_center;                   // per enu_buf entry: seen in the image centre
     std::vector<std::pair<rclcpp::Time, int>> class_buf; // (stamp, class_id) light observations, pre-link
     int         frames_missing = 0;
     int         linked_buoy_id = -1;               // -1 until confirmed & linked
   };
 
   // One entry per PHYSICAL buoy in the GPS world map (any buoy class merges into it).
-  // Position = running mean of EVERY observation across all passes (converges in place).
+  // Position = median of the last obs_window observations (robust to sway / bad frames).
   // State = light pattern from the recent class history: red / green / entry (flashing blue) /
   //         exit (solid blue) / off / unknown (not enough history yet).
   struct BuoyMapPoint
@@ -99,21 +107,23 @@ public:
     int         buoy_id;
     int         class_id;
     std::string label;
-    double      sum_east = 0.0, sum_north = 0.0;   // accumulators
-    int         obs_count = 0;                     // total observations averaged in
-    double      east_m = 0.0, north_m = 0.0;       // = sum / obs_count (map ENU from home)
+    std::deque<std::tuple<double, double, bool>> obs_hist;  // last obs_window (east_m, north_m, center)
+    int         obs_count = 0;                     // total observations ever added
+    double      east_m = 0.0, north_m = 0.0;       // = median of obs_hist (map ENU from home)
     double      lat = 0.0, lon = 0.0;              // derived from east_m/north_m
     int         sighting_count = 0;                // distinct passes that confirmed it
     float       best_confidence = 0.0f;
     rclcpp::Time last_seen{0, 0, RCL_ROS_TIME};
     std::deque<std::pair<rclcpp::Time, std::string>> light_hist;  // (stamp, "red"/"green"/"blue"/"off")
     std::string state = "unknown";
+    int         test_role = 0;                     // enable_testing: 1 = entry, 2 = exit, 0 = none
   };
 
 private:
   // ── Setup ───────────────────────────────────────────────────────────────────
   void setupCameraIntrinsics();
   void setupCamToBodyRotation(double roll_deg, double pitch_deg, double yaw_deg);
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
 
   // ── Callbacks ───────────────────────────────────────────────────────────────
   void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg);
@@ -149,9 +159,20 @@ private:
     const std::vector<GeoPoint> & geo,
     const rclcpp::Time & stamp);
   // add one observation to a buoy's running mean and refresh derived fields
-  void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m,
+  void addObservationToBuoy(BuoyMapPoint & pt, double east_m, double north_m, bool center,
                             float confidence, const rclcpp::Time & stamp);
   void publishMarkers();
+  // pose of the drone at a given time (nearest entry of pose_hist_), altitude kept from `state`
+  MavrosState poseAt(const rclcpp::Time & t, const MavrosState & state);
+  // height above the water: rel_alt → pose.z → fixed altitude, + altitude_offset_m
+  double altitudeAboveWater(const MavrosState & state) const;
+  void checkPnpAltitude(const std::vector<Detection> & dets, const MavrosState & state);
+  void checkMountYaw(const MavrosState & state);
+  // fuse map points closer than cluster_radius_m into one buoy (repeat until none left)
+  void clusterBuoyMap();
+  static void mergeBuoyInto(BuoyMapPoint & keep, BuoyMapPoint & gone);
+  static void updateBuoyPosition(BuoyMapPoint & pt, double home_lat, double home_lon,
+                                 int min_center_obs);
 
   // ── Buoy light state (Task 1) ────────────────────────────────────────────────
   std::string lightColor(int class_id) const;   // "red"/"green"/"blue"/"off" from the class name
@@ -225,6 +246,33 @@ private:
   double fixed_altitude_m_;
   int max_pose_age_ms_;
   double altitude_offset_m_ = 0.0;   // takeoff point height above the water [m]
+  double camera_latency_ms_ = 0.0;   // frame grab → real capture time; pose is taken from then
+  double map_center_ratio_ = 1.0;    // only detections inside this central part of the image feed the map
+  bool   pnp_alt_check_ = false;     // log PnP depth vs altitude (checks altitude / fx)
+  bool   mount_yaw_check_ = false;   // log the cam_to_body yaw that matches the image motion
+  std::deque<MavrosState> pose_hist_;  // last ~2 s of poses (guarded by state_mutex_)
+  // mount yaw check: sums of unit vectors of (true - estimated) motion angle
+  double yaw_chk_sum_c_ = 0.0, yaw_chk_sum_s_ = 0.0;
+  int    yaw_chk_n_ = 0;
+  double fx_chk_px_ = 0.0, fx_chk_m_ = 0.0;   // fx check: image motion [px] · altitude vs drone motion [m]
+  // vision mode from the order topic:
+  //   UAV-GO:VISION-MAP / VISION-TARGET / VISION-MAP-TARGET → run with those outputs
+  //   UAV-GO:VISION-PAUSE or MISSION-DONE → pause (map kept and still published)
+  bool paused_ = false;
+  bool started_ = false;           // first start order received
+  bool mode_map_ = true;           // build + publish the buoy map (map_topic_prefix)
+  bool mode_target_ = true;        // publish target_topic_prefix<class>
+  double order_timeout_s_ = 3600.0;
+  rclcpp::Time wait_start_;
+  int clear_count_ = 0;
+  rclcpp::TimerBase::SharedPtr clear_timer_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr order_sub_;
+  void orderCallback(const std_msgs::msg::String::SharedPtr msg);
+  void clearOutputs();                                   // empty map, zero targets, no markers
+  void publishZeroTargets(const rclcpp::Time & stamp);   // all classes "not detected"
+  double yaw_chk_prev_e_ = 0.0, yaw_chk_prev_n_ = 0.0;
+  bool   yaw_chk_has_prev_ = false;
+  std::vector<std::pair<double, double>> frame_flow_px_;  // this frame: (du, dv) of tracked buoys
 
   std::string output_topic_;
   std::string marker_topic_;
@@ -259,6 +307,10 @@ private:
   std::string target_topic_prefix_;
   std::string map_topic_prefix_;
   std::string pose_frame_id_;
+  double offset_x_m_ = 0.0;             // added to /target poses (camera frame) — shifts the centering point
+  double offset_y_m_ = 0.0;
+  double offset_z_m_ = 0.0;
+  int    crosshair_offset_y_px_ = 0;    // moves the drawn horizontal crosshair line (display / stream only)
 
   // ── Camera intrinsics ────────────────────────────────────────────────────────
   cv::Mat camera_matrix_;
@@ -293,6 +345,23 @@ private:
 
   double map_merge_radius_m_;
   int    min_obs_to_commit_;    // min GPS frames in buffer before committing a track
+  double cluster_radius_m_;     // map points closer than this are the SAME buoy (< half buoy spacing)
+  int    min_obs_publish_;      // a map point is shown / published only after this many observations
+  double max_tilt_deg_;         // skip map observations while the drone tilts more than this
+  int    obs_window_;           // observations kept per buoy for the median position
+  bool   enable_testing_;       // testing: 1st blue buoy = entry, 2nd blue buoy = exit
+  int    test_roles_given_ = 0; // enable_testing: blue roles handed out so far (0..2)
+  double survey_time_s_;
+  // edge correction: ground offset × (1 + edge_k · r²), r = 0 centre .. 1 image corner
+  double edge_k_ = 0.0;
+  bool   edge_k_check_ = false;           // fit edge_k from buoys seen both in the centre and at the edge
+  double edge_fit_num_ = 0.0, edge_fit_den_ = 0.0, edge_fit_ang_ = 0.0;
+  int    edge_fit_n_ = 0;
+  void addEdgeSample(const BuoyMapPoint & pt, const GeoPoint & obs);        // Task 1 feedback (/vision_geo/map/buoy_*) held back this long after start
+  rclcpp::Time survey_start_{0, 0, RCL_ROS_TIME};
+  bool   survey_started_ = false;
+  bool   survey_done_ = false;
+  std::set<std::pair<int, int>> seen_together_;  // buoy id pairs seen in the SAME frame → never fused
   int    track_exit_frames_;    // missed frames before track is committed
   double pixel_match_radius_px_; // pixel center distance to match same buoy across frames
 

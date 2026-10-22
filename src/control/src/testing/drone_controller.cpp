@@ -53,7 +53,7 @@ DroneController::DroneController() : Node("drone_controller") {
     this->gps_state_sub = this->create_subscription<mavros_msgs::msg::GPSRAW>("rian/gpsstatus/gps1/raw", qos, std::bind(&DroneController::gps_state_cb, this, std::placeholders::_1));
     this->accel_sub = this->create_subscription<geometry_msgs::msg::AccelWithCovarianceStamped>("rian/local_position/accel", qos, std::bind(&DroneController::accel_cb, this, std::placeholders::_1));
     this->gps_sub = this->create_subscription<sensor_msgs::msg::NavSatFix>("rian/global_position/global", qos, std::bind(&DroneController::gps_cb, this, std::placeholders::_1));
-    this->alt_sub = this->create_subscription<sensor_msgs::msg::Range>("rian/rangefinder/rangefinder", qos, std::bind(&DroneController::alt_cb, this, std::placeholders::_1));
+    this->alt_sub = this->create_subscription<sensor_msgs::msg::Range>("rian/rangefinder_pub", qos, std::bind(&DroneController::alt_cb, this, std::placeholders::_1));
     this->rel_alt_sub = this->create_subscription<std_msgs::msg::Float64>("rian/global_position/rel_alt", qos, std::bind(&DroneController::rel_alt_cb, this, std::placeholders::_1));
     this->wp_reached_sub = this->create_subscription<mavros_msgs::msg::WaypointReached>("rian/mission/reached", qos, std::bind(&DroneController::wp_reached_cb, this, std::placeholders::_1));
     this->laser_sub = this->create_subscription<sensor_msgs::msg::LaserScan>("scan", qos, std::bind(&DroneController::laser_cb, this, std::placeholders::_1));

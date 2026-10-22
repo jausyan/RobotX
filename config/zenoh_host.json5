@@ -1,0 +1,27 @@
+// Zenoh bridge on the HOST (laptop): receives the drone topics into the local ROS graph.
+// Drone side: ~/zenoh/run_zenoh.sh on the drone (listens on tcp/7447).
+{
+  mode: "peer",
+  // drone address is passed by script/zenoh_host.sh (-e tcp/<ip>:7447)
+  scouting: {
+    multicast: { enabled: false }
+  },
+  plugins: {
+    ros2dds: {
+      allow: {
+        publishers: [],
+        // drone topics received here (republished in the host ROS_DOMAIN_ID)
+        subscribers: [
+          "/vision_geo/markers",
+          "/rian/state",
+          "/rian/extended_state"
+        ],
+        service_servers: [],
+        service_clients: [],
+        action_servers: [],
+        action_clients: []
+      },
+      reliable_routes_blocking: false
+    }
+  }
+}

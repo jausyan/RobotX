@@ -415,7 +415,33 @@ void rotateByDegrees(const std::shared_ptr<DroneController>&node, rclcpp::Rate &
     * - degrees: angle to rotate in DEGREES (positive = RIGHT/clockwise, negative = LEFT/counter-clockwise)
      */
 
-void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_alt, float tolerance = 0.1, float timeout = 15.0);
+    /**
+     * Move to local z = req_alt holding XY, in steps of `step` m (slow, safe descend):
+     * the setpoint moves `step` m, waits until the drone is there, then the next step.
+     *
+     * parameters:
+     * - req_alt:   wanted local z in meters
+     * - step:      meters per step (smaller = slower descend; 0 = one go)
+     * - tolerance: a step is done when |step z - z| <= tolerance
+     * - timeout:   give up when one step takes longer than this [s]
+     */
+void fix_alt(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_alt, float step = 0.0, float tolerance = 0.1, float timeout = 15.0);
+
+    /**
+     * Same as fix_alt, but the target is the RANGEFINDER reading (height above the surface below),
+     * not local z. Holds XY; the wanted range moves `step` m at a time, each loop sets
+     * z = current z + (step range - range).
+     *
+     * parameters:
+     * - req_range: wanted rangefinder reading in meters
+     * - step:      meters per step (smaller = slower descend; 0 = one go)
+     * - tolerance: a step is done when |step range - range| <= tolerance
+     * - timeout:   give up when one step takes longer than this [s]
+     *
+     * returns:
+     * - posee: the pose at the end
+     */
+void fix_alt_range(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float req_range, float step = 0.0, float tolerance = 0.1, float timeout = 15.0);
 
 void centering_red(
     const std::shared_ptr<DroneController>&node,

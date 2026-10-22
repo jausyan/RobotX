@@ -1,4 +1,4 @@
-PORT="/dev/serial/by-id/usb-ArduPilot_Pixhawk6X_2D004C001151323530363730-if00"
+PORT="/dev/serial/by-id/usb-ArduPilot_Pixhawk6X-bdshot_2D004C001151323530363730-if00"
 CONFIG="$HOME/RobotX/config/mavros_param.yaml"
 MAVROS_LAUNCH="/opt/ros/jazzy/share/mavros/launch"
 
