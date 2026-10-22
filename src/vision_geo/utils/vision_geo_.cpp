@@ -2,6 +2,7 @@
 
 #include <ctime>
 #include <filesystem>
+#include <sstream>
 
 // ── Constructor ────────────────────────────────────────────────────────────────
 
@@ -2317,9 +2318,17 @@ void VisionGeoNode::recordFrame(const cv::Mat & frame)
     const std::time_t t = std::time(nullptr);
     std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&t));
     const std::string path =
-      (std::filesystem::absolute(record_dir_) / ("vision_geo_" + std::string(stamp) + ".avi")).string();
+      (std::filesystem::absolute(record_dir_) / ("vision_geo_" + std::string(stamp) + ".mp4")).string();
     const double fps = camera_fps_ > 0 ? camera_fps_ : 30.0;
-    if (!record_writer_.open(path, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, frame.size(), true)) {
+    // H.264 .mp4 through GStreamer (our OpenCV has no FFmpeg); the mp4 header is rewritten
+    // every second (room for 2 h), so the file stays playable even if the node is killed
+    std::ostringstream pipeline;
+    pipeline
+      << "appsrc ! videoconvert ! video/x-raw,format=I420 ! "
+      << "x264enc speed-preset=superfast pass=quant quantizer=18 key-int-max=" << static_cast<int>(fps) << " ! "
+      << "h264parse ! mp4mux reserved-max-duration=7200000000000 reserved-moov-update-period=1000000000 ! "
+      << "filesink location=\"" << path << "\"";
+    if (!record_writer_.open(pipeline.str(), cv::CAP_GSTREAMER, 0, fps, frame.size(), true)) {
       RCLCPP_ERROR(get_logger(), "record_video: cannot open %s — recording off", path.c_str());
       record_failed_ = true;
       return;
