@@ -315,6 +315,7 @@ private:
   double offset_x_m_ = 0.0;             // added to /target poses (camera frame) — shifts the centering point
   double offset_y_m_ = 0.0;
   double offset_z_m_ = 0.0;
+  int    crosshair_offset_x_px_ = 0;    // moves the drawn vertical crosshair line (display / stream only)
   int    crosshair_offset_y_px_ = 0;    // moves the drawn horizontal crosshair line (display / stream only)
 
   // ── Camera intrinsics ────────────────────────────────────────────────────────
