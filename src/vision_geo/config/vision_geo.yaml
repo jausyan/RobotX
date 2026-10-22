@@ -63,6 +63,8 @@ vision_geo_node:
     enable_testing: true         # true: 1st blue buoy = entry, 2nd blue buoy = exit (no blink check)
     survey_time: 10.0             # [s] map buoys this long after UAV-GO before publishing /vision_geo/map/buoy_* (Task 1 feedback)
     show_window: false
+    record_video: true              # true = save the raw camera frames (no boxes / crosshair) to record_dir
+    record_dir: "video"             # relative to the folder the node is started from (workspace root)
     window_name: "vision_geo"
     enable_stream: true
     stream_host: "10.7.101.205"         

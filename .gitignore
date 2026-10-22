@@ -38,3 +38,5 @@ __pycache__/
 
 # trained weights (like *.onnx above)
 *.pt
+# recorded videos (record_video / record_video.py) — never pushed
+video/

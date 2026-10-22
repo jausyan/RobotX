@@ -1,5 +1,9 @@
 #include "vision_geo_.hpp"
 
+#include <ctime>
+#include <filesystem>
+#include <sstream>
+
 // ── Constructor ────────────────────────────────────────────────────────────────
 
 VisionGeoNode::VisionGeoNode()
@@ -76,6 +80,8 @@ VisionGeoNode::VisionGeoNode()
 
   // display
   show_window_ = declare_parameter<bool>("show_window", true);
+  record_video_ = declare_parameter<bool>("record_video", false);
+  record_dir_   = declare_parameter<std::string>("record_dir", "video");
   window_name_ = declare_parameter<std::string>("window_name", "vision_geo");
 
   // GStreamer stream (same params as vision_hailo)
@@ -268,6 +274,9 @@ VisionGeoNode::~VisionGeoNode()
 #endif
   if (stream_writer_.isOpened()) {
     stream_writer_.release();
+  }
+  if (record_writer_.isOpened()) {
+    record_writer_.release();
   }
   if (show_window_) {
     cv::destroyWindow(window_name_);
@@ -839,6 +848,8 @@ void VisionGeoNode::processFrame()
     image_pub_->publish(img_msg);
     // -----------------------------------------------------
   }
+
+  recordFrame(frame);   // raw, before anything is drawn (also while paused, camera only)
 
   if (paused_) {
     if (!started_) {
@@ -2294,6 +2305,40 @@ bool waitCommand(const rclcpp::Node::SharedPtr & node, const std::string & expec
 
 // Straighten the stream copy with the calibration (camera_matrix / distortion_coeffs).
 // Only for viewing: detection, centering and GPS keep using the raw (distorted) image.
+// ── Raw recording (record_video) ──────────────────────────────────────────────
+// Saves the frame exactly as grabbed (no boxes, no crosshair) — for datasets / review.
+void VisionGeoNode::recordFrame(const cv::Mat & frame)
+{
+  if (!record_video_ || frame.empty()) return;
+  if (!record_writer_.isOpened()) {
+    if (record_failed_) return;
+    std::error_code ec;
+    std::filesystem::create_directories(record_dir_, ec);
+    char stamp[32];
+    const std::time_t t = std::time(nullptr);
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&t));
+    const std::string path =
+      (std::filesystem::absolute(record_dir_) / ("vision_geo_" + std::string(stamp) + ".mp4")).string();
+    const double fps = camera_fps_ > 0 ? camera_fps_ : 30.0;
+    // H.264 .mp4 through GStreamer (our OpenCV has no FFmpeg); the mp4 header is rewritten
+    // every second (room for 2 h), so the file stays playable even if the node is killed
+    std::ostringstream pipeline;
+    pipeline
+      << "appsrc ! videoconvert ! video/x-raw,format=I420 ! "
+      << "x264enc speed-preset=superfast pass=quant quantizer=18 key-int-max=" << static_cast<int>(fps) << " ! "
+      << "h264parse ! mp4mux reserved-max-duration=7200000000000 reserved-moov-update-period=1000000000 ! "
+      << "filesink location=\"" << path << "\"";
+    if (!record_writer_.open(pipeline.str(), cv::CAP_GSTREAMER, 0, fps, frame.size(), true)) {
+      RCLCPP_ERROR(get_logger(), "record_video: cannot open %s — recording off", path.c_str());
+      record_failed_ = true;
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "record_video: raw frames -> %s (%dx%d @ %.0f fps)",
+      path.c_str(), frame.cols, frame.rows, fps);
+  }
+  record_writer_.write(frame);
+}
+
 void VisionGeoNode::undistortForStream(cv::Mat & img)
 {
   if (camera_matrix_.empty() || dist_coeffs_.empty() || cv::countNonZero(dist_coeffs_) == 0) {
