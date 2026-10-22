@@ -63,6 +63,7 @@ private:
   std::string className(int class_id) const;
   void drawDetections(cv::Mat & frame, const std::vector<Detection> & detections) const;
   void drawCrosshair(cv::Mat & frame) const;
+  cv::Point2d crosshairShift(double z) const;
   void displayFrame(cv::Mat & frame, const std::vector<Detection> & detections);
   bool ensureStreamWriter();
   void undistortForStream(cv::Mat & img);
@@ -108,8 +109,9 @@ private:
   double offset_x_m_ = 0.0;             // added to the published pose (camera frame) — shifts the centering point
   double offset_y_m_ = 0.0;
   double offset_z_m_ = 0.0;
-  int    crosshair_offset_x_px_ = 0;    // moves the drawn vertical crosshair line (display / stream only)
-  int    crosshair_offset_y_px_ = 0;    // moves the drawn horizontal crosshair line (display / stream only)
+  int    crosshair_offset_x_px_ = 0;    // moves the drawn vertical crosshair line; the pose follows it
+  int    crosshair_offset_y_px_ = 0;    // moves the drawn horizontal crosshair line; the pose follows it
+  cv::Size frame_size_;                 // last camera frame size (crosshair position)
   bool use_camera_info_ = false;
   std::string camera_info_topic_;
   bool camera_info_received_ = false;
