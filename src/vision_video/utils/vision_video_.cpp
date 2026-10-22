@@ -371,8 +371,9 @@ void VisionVideoNode::publishPose(const cv::Mat & rvec, const cv::Mat & tvec)
   geometry_msgs::msg::PoseStamped msg;
   msg.header.stamp = now();
   msg.header.frame_id = pose_frame_id_;
-  msg.pose.position.x = tvec.at<double>(0) + offset_x_m_;
-  msg.pose.position.y = tvec.at<double>(1) + offset_y_m_;
+  const cv::Point2d shift = crosshairShift(tvec.at<double>(2));
+  msg.pose.position.x = tvec.at<double>(0) - shift.x + offset_x_m_;
+  msg.pose.position.y = tvec.at<double>(1) - shift.y + offset_y_m_;
   msg.pose.position.z = tvec.at<double>(2) + offset_z_m_;
 
   cv::Mat R;
@@ -510,6 +511,18 @@ void VisionVideoNode::drawCrosshair(cv::Mat & frame) const
   cv::line(frame, cv::Point(center_x, 0), cv::Point(center_x, frame.rows), green, 1);
 }
 
+// Crosshair offset in metres at depth z: the target pose is measured from the drawn crosshair
+// (not the image centre), so centering puts the target on the crosshair. 0 px offset = no change.
+cv::Point2d VisionVideoNode::crosshairShift(double z) const
+{
+  if (frame_size_.empty() || (crosshair_offset_x_px_ == 0 && crosshair_offset_y_px_ == 0)) return {0.0, 0.0};
+  const cv::Point2f c(frame_size_.width / 2.0f, frame_size_.height / 2.0f);
+  const std::vector<cv::Point2f> px = {c, {c.x + crosshair_offset_x_px_, c.y + crosshair_offset_y_px_}};
+  std::vector<cv::Point2f> n;
+  cv::undistortPoints(px, n, camera_matrix_, dist_coeffs_);
+  return {(n[1].x - n[0].x) * z, (n[1].y - n[0].y) * z};
+}
+
 void VisionVideoNode::displayFrame(cv::Mat & frame, const std::vector<Detection> & detections)
 {
   if (!show_window_) {
@@ -629,6 +642,7 @@ void VisionVideoNode::processFrame()
   }
 
   recordFrame(frame);   // raw, before anything is drawn
+  frame_size_ = frame.size();
   std::vector<Detection> detections = infer(frame);
   updateFps();
   streamFrame(frame, detections);
