@@ -47,6 +47,7 @@ VisionVideoNode::VisionVideoNode()
   offset_x_m_ = declare_parameter<double>("offset_x_m", 0.0);
   offset_y_m_ = declare_parameter<double>("offset_y_m", 0.0);
   offset_z_m_ = declare_parameter<double>("offset_z_m", 0.0);
+  crosshair_offset_x_px_ = declare_parameter<int>("crosshair_offset_x_px", 0);
   crosshair_offset_y_px_ = declare_parameter<int>("crosshair_offset_y_px", 0);
 
   if (use_camera_info_) {
@@ -502,7 +503,7 @@ void VisionVideoNode::drawDetections(cv::Mat & frame, const std::vector<Detectio
 
 void VisionVideoNode::drawCrosshair(cv::Mat & frame) const
 {
-  int center_x = frame.cols / 2;
+  int center_x = std::clamp(frame.cols / 2 + crosshair_offset_x_px_, 0, frame.cols - 1);
   int center_y = std::clamp(frame.rows / 2 + crosshair_offset_y_px_, 0, frame.rows - 1);
   cv::Scalar green(0, 255, 0);
   cv::line(frame, cv::Point(0, center_y), cv::Point(frame.cols, center_y), green, 1);

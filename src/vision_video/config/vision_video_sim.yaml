@@ -18,6 +18,7 @@ vision_video_node:
     offset_x_m: 0.0                 # added to the pose [m, camera frame] — shifts the centering point
     offset_y_m: 0.0
     offset_z_m: 0.0
+    crosshair_offset_x_px: 0        # moves the drawn vertical crosshair line [px, + = right]
     crosshair_offset_y_px: 0        # moves the drawn horizontal crosshair line [px, + = down]
     show_window: true
     record_video: false             # true = save the raw camera frames (no boxes / crosshair) to record_dir
