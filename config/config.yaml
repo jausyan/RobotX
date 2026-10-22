@@ -43,12 +43,12 @@
       usv_alt: 15.0               
       approach_alt: 1.0          
       drop_alt: 2.0
-      alt_step: 0.3               # fix_alt / fix_alt_range: m per step (smaller = slower, safer descend; 0 = one go)
+      alt_step: 0.5               # fix_alt / fix_alt_range: m per step (smaller = slower, safer descend; 0 = one go)
 
     rangefinder_param:
       centering_alt_1: 4.0
-      centering_alt_2: 1.5
-      centering_alt_3: 1.0
+      centering_alt_2: 1.2
+      centering_alt_3: 0.8
 
     communication:
       order_topic: "/mission/order"                 
@@ -70,7 +70,7 @@
       kp: 1.6 
       kd: 0.28 
       min_velocity: 0.02
-      speed_xy: 0.15 
+      speed_xy: 0.10 #0.15 
       acc: 0.20
       maxAccel: 0.7 
       X: 0.30
@@ -81,7 +81,7 @@
       hover_pitch: 0.0
       hover_roll: 0.0
       recovery_method: "local_pose"
-      centering_tolerance_first: 0.08 
+      centering_tolerance_first: 0.05 
       centering_tolerance_second: 0.05        
       hold_kp: 1.2
       detect_timeout: 0.4 

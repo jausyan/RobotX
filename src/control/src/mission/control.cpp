@@ -209,7 +209,6 @@ int main(int argc, char **argv) {
     }
 
     setTask(node, TASK_NONE);
-    // controlServoRepeated(node, 1, servo_buka, signal_repeat);
     controlServoRepeated(node, 1, servo_tutup, signal_repeat);
     setMode(node, rate, "GUIDED");
     RCLCPP_INFO(node->get_logger(), "PRE-RUN CONFIRMATION 1 / 0? (1 : WAIT FOR RUN START, 0 : ABORT)");
@@ -284,7 +283,6 @@ int main(int argc, char **argv) {
         target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
         RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s --> %s", order.circle.c_str(), target.c_str());
         fix_alt(node, rate, posee, approach_alt, alt_step);
-        fix_alt_range(node, rate, posee, centering_alt_1, alt_step, 0.3, 30.0);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
         fix_alt_range(node, rate, posee, centering_alt_2, alt_step, 0.3, 30.0);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);

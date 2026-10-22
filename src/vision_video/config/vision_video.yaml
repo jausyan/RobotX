@@ -1,7 +1,7 @@
 vision_video_node:
   ros__parameters:
     input_mode: "device"
-    input_source: "/dev/video2"
+    input_source: "/dev/video0"
     model_path: "/home/robotx/RobotX/models/V6.onnx"
     input_width: 640
     input_height: 640
@@ -40,7 +40,7 @@ vision_video_node:
     record_dir: "video"             # relative to the folder the node is started from (workspace root)
     window_name: "vision_video_detection"
     enable_stream: true
-    stream_host: "10.7.101.80"
+    stream_host: "192.168.0.115"
     stream_port: 5000
     stream_width: 1280 #848 
     stream_height: 720 #480
