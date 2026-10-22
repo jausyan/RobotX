@@ -70,7 +70,7 @@
       kp: 1.6 
       kd: 0.28 
       min_velocity: 0.02
-      speed_xy: 0.10 #0.15 
+      speed_xy: 0.15 #0.15 
       acc: 0.20
       maxAccel: 0.7 
       X: 0.30
