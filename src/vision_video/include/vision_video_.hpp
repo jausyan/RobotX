@@ -66,6 +66,7 @@ private:
   void displayFrame(cv::Mat & frame, const std::vector<Detection> & detections);
   bool ensureStreamWriter();
   void undistortForStream(cv::Mat & img);
+  void recordFrame(const cv::Mat & frame);
   void streamFrame(const cv::Mat & frame, const std::vector<Detection> & detections);
 
   void processFrame();
@@ -121,6 +122,10 @@ private:
   cv::dnn::Net net_;
   cv::VideoCapture capture_;
   cv::VideoWriter stream_writer_;
+  bool record_video_ = false;           // save the raw frames (no boxes / crosshair) to record_dir_
+  std::string record_dir_;
+  cv::VideoWriter record_writer_;
+  bool record_failed_ = false;
   bool stream_undistort_ = false;        // straighten ONLY the stream copy (detection stays on the raw image)
   double stream_undistort_alpha_ = 1.0;  // 1 = keep the whole view (black curved borders), 0 = crop to valid pixels
   cv::Mat stream_map1_, stream_map2_;    // undistortion maps, built once per frame size

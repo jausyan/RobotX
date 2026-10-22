@@ -43,3 +43,5 @@ __pycache__/
 src/*/build/
 src/*/install/
 src/*/log/
+# recorded videos (record_video / record_video.py) — never pushed
+video/

@@ -1,5 +1,8 @@
 #include "vision_video_.hpp"
 
+#include <ctime>
+#include <filesystem>
+
 // ── Constructor ────────────────────────────────────────────────────────────────
 
 VisionVideoNode::VisionVideoNode()
@@ -21,6 +24,8 @@ VisionVideoNode::VisionVideoNode()
   conf_threshold_ = declare_parameter<double>("conf_threshold", 0.4);
   nms_threshold_ = declare_parameter<double>("nms_threshold", 0.45);
   show_window_ = declare_parameter<bool>("show_window", true);
+  record_video_ = declare_parameter<bool>("record_video", false);
+  record_dir_ = declare_parameter<std::string>("record_dir", "video");
   window_name_ = declare_parameter<std::string>("window_name", "vision_video_detection");
   enable_stream_ = declare_parameter<bool>("enable_stream", false);
   stream_host_ = declare_parameter<std::string>("stream_host", "10.7.101.148");
@@ -118,6 +123,9 @@ VisionVideoNode::~VisionVideoNode()
 #endif
   if (stream_writer_.isOpened()) {
     stream_writer_.release();
+  }
+  if (record_writer_.isOpened()) {
+    record_writer_.release();
   }
   if (show_window_) {
     cv::destroyWindow(window_name_);
@@ -413,6 +421,32 @@ void VisionVideoNode::publishLegacyPose(const cv::Mat & frame, const Detection &
   legacy_pose_pub_->publish(std::move(msg));
 }
 
+// ── Raw recording (record_video) ──────────────────────────────────────────────
+// Saves the frame exactly as grabbed (no boxes, no crosshair) — for datasets / review.
+void VisionVideoNode::recordFrame(const cv::Mat & frame)
+{
+  if (!record_video_ || frame.empty()) return;
+  if (!record_writer_.isOpened()) {
+    if (record_failed_) return;
+    std::error_code ec;
+    std::filesystem::create_directories(record_dir_, ec);
+    char stamp[32];
+    const std::time_t t = std::time(nullptr);
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&t));
+    const std::string path =
+      (std::filesystem::absolute(record_dir_) / ("vision_video_" + std::string(stamp) + ".avi")).string();
+    const double fps = camera_fps_ > 0 ? camera_fps_ : 30.0;
+    if (!record_writer_.open(path, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, frame.size(), true)) {
+      RCLCPP_ERROR(get_logger(), "record_video: cannot open %s — recording off", path.c_str());
+      record_failed_ = true;
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "record_video: raw frames -> %s (%dx%d @ %.0f fps)",
+      path.c_str(), frame.cols, frame.rows, fps);
+  }
+  record_writer_.write(frame);
+}
+
 // ── Display & stream ───────────────────────────────────────────────────────────
 
 void VisionVideoNode::updateFps()
@@ -584,6 +618,7 @@ void VisionVideoNode::processFrame()
     }
   }
 
+  recordFrame(frame);   // raw, before anything is drawn
   std::vector<Detection> detections = infer(frame);
   updateFps();
   streamFrame(frame, detections);
