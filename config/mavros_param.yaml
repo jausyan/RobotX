@@ -1,7 +1,7 @@
 /**/mavros_node:
   ros__parameters:
-    fcu_url: "/dev/serial/by-id/usb-ArduPilot_Pixhawk6X_2D004C001151323530363730-if00:115200"
-    gcs_url: "udp://@192.168.0.115:14550"
+    fcu_url: "/dev/serial/by-id/usb-ArduPilot_Pixhawk6X-bdshot_2D004C001151323530363730-if00:115200"
+    gcs_url: "udp://@192.168.0.99:14550"
     tgt_system: 1
     tgt_component: 1
     fcu_protocol: "v2.0"
@@ -36,4 +36,4 @@
         orientation: PITCH_270
         field_of_view: 0.0
         send_tf: false
-        sensor_position: {x: 0.0, y: 0.0, z: -0.1}
+        sensor_position: {x: 0.0, y: 0.0, z: -0.1} 

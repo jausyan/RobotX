@@ -34,15 +34,21 @@
       geofence_lat: [0.0]          
       geofence_lon: [0.0]
 
-      survey_lat: [-7.2863208, -7.2863208, -7.2863208, -7.2863208]  
-      survey_lon: [112.7961644, 112.7961644, 112.7961644, 112.7961644]
+      survey_lat: [-7.2864076, -7.2863081, -7.2863818, -7.2862840] 
+      survey_lon: [112.7960508, 112.7961492, 112.7960302, 112.796149]
       survey_alt: 20.0             
       survey_time: 600.0            
 
       # Task 2 & 3: delivery
       usv_alt: 15.0               
-      approach_alt: 10.0          
-      drop_alt: 2.0              
+      approach_alt: 1.0          
+      drop_alt: 2.0
+      alt_step: 0.3               # fix_alt / fix_alt_range: m per step (smaller = slower, safer descend; 0 = one go)
+
+    rangefinder_param:
+      centering_alt_1: 4.0
+      centering_alt_2: 1.5
+      centering_alt_3: 1.0
 
     communication:
       order_topic: "/mission/order"                 
@@ -75,8 +81,8 @@
       hover_pitch: 0.0
       hover_roll: 0.0
       recovery_method: "local_pose"
-      centering_tolerance_first: 0.50 
-      centering_tolerance_second: 0.20        
+      centering_tolerance_first: 0.08 
+      centering_tolerance_second: 0.05        
       hold_kp: 1.2
       detect_timeout: 0.4 
 
@@ -84,6 +90,6 @@
       channel_red: 9               
       channel_green: 10
       channel_blue: 11
-      servo_buka: 900             
+      servo_buka: 1200             
       servo_tutup: 270
       signal_repeat: 3
