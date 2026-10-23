@@ -15,9 +15,9 @@ vision_geo_node:
                     0.0, 0.0, 1.0]
     distortion_coeffs: [-0.46164827, 0.25912474, -0.00177962, 0.00652512, -0.07635056]
     cam_to_body_rpy: [180.0, 0.0, -90.0]
-    model_path: "/home/robotx/RobotX/models/V7.onnx"
-    input_width: 640
-    input_height: 640
+    model_path: "/home/robotx/RobotX/models/V8_720.onnx"
+    input_width: 736
+    input_height: 736
     letterbox: true                 
     camera_width: 1280
     camera_height: 720
@@ -67,7 +67,7 @@ vision_geo_node:
     record_dir: "video"             # relative to the folder the node is started from (workspace root)
     window_name: "vision_geo"
     enable_stream: true
-    stream_host: "10.125.150.107"         
+    stream_host: "192.168.0.115"         
     stream_port: 5000
     stream_width: 1280
     stream_height: 720
@@ -84,4 +84,4 @@ vision_geo_node:
     offset_y_m: 0.0                 
     offset_z_m: 0.0
     crosshair_offset_x_px: 0          # [px] moves the vertical crosshair line (+ = right); the target pose is measured from the crosshair
-    crosshair_offset_y_px: 200       
+    crosshair_offset_y_px: 190       

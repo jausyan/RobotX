@@ -1,10 +1,10 @@
 vision_video_node:
   ros__parameters:
     input_mode: "device"
-    input_source: "/dev/video0"
-    model_path: "/home/robotx/RobotX/models/V6.onnx"
-    input_width: 640
-    input_height: 640
+    input_source: "/dev/video2"
+    model_path: "/home/robotx/RobotX/models/V8_720.onnx"
+    input_width: 736
+    input_height: 736
     letterbox: true                
     camera_width: 1280
     camera_height: 720
@@ -35,13 +35,13 @@ vision_video_node:
     offset_y_m: 0.0
     offset_z_m: 0.0
     crosshair_offset_x_px: 0        # [px, + = right] moves the vertical crosshair line; the pose is measured from the crosshair
-    crosshair_offset_y_px: 250        # [px, + = down] moves the horizontal crosshair line; the pose is measured from the crosshair
+    crosshair_offset_y_px: 190        # [px, + = down] moves the horizontal crosshair line; the pose is measured from the crosshair
     show_window: false
     record_video: true              # true = save the raw camera frames (no boxes / crosshair) to record_dir
     record_dir: "video"             # relative to the folder the node is started from (workspace root)
     window_name: "vision_video_detection"
     enable_stream: true
-    stream_host: "10.125.150.107"
+    stream_host: "192.168.0.115"
     stream_port: 5000
     stream_width: 1280 #848 
     stream_height: 720 #480

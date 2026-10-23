@@ -253,15 +253,6 @@ int main(int argc, char **argv) {
         pubCommand(node, "UAV-GO:VISION-MAP", order_topic);
         waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
         setMode(node, rate, "rtl");
-        waitCommand(node, "UAV-GO", order_topic, command_timeout, true);
-        takeoff(node, rate, posee, takeoff_altitude, false);
-        holdPosition(node, rate, posee, hold_time);
-        clearMission(node);
-        pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], takeoff_altitude)});
-        setMode(node, rate, "AUTO");
-        waitForWP(node, rate, 1);
-        setMode(node, rate, "GUIDED");
-        holdPosition(node, rate, posee, hold_time);
         setTask(node, TASK_NONE);
     } else {
         RCLCPP_WARN(node->get_logger(), "TASK 1: SKIPPED (mission.use_task_1 = false)");

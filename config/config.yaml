@@ -24,7 +24,7 @@
       takeoff_altitude: 15.0
       hold_time: 1.0
 
-      use_task_1: false
+      use_task_1: true
       use_task_2: true
       use_task_3: false
 
