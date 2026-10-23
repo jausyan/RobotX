@@ -254,15 +254,6 @@ int main(int argc, char **argv) {
         pubCommand(node, "UAV-GO:VISION-MAP", order_topic);
         waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
         setMode(node, rate, "rtl");
-        waitCommand(node, "UAV-GO", order_topic, command_timeout, true);
-        takeoff(node, rate, posee, takeoff_altitude, false);
-        holdPosition(node, rate, posee, hold_time);
-        clearMission(node);
-        pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], takeoff_altitude)});
-        setMode(node, rate, "AUTO");
-        waitForWP(node, rate, 1);
-        setMode(node, rate, "GUIDED");
-        holdPosition(node, rate, posee, hold_time);
         setTask(node, TASK_NONE);
     } else {
         RCLCPP_WARN(node->get_logger(), "TASK 1: SKIPPED (mission.use_task_1 = false)");
@@ -271,6 +262,17 @@ int main(int argc, char **argv) {
     // ============================== TASK 2 ======================================
     if (use_task_2) {
         setTask(node, TASK_INFRA_SURVEY_REPAIR);
+        if (use_task_1) {   // task 1 ended with RTL: wait for the landing (ArduPilot disarms), then take off again
+            RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR RTL LANDING (disarm)...");
+            while (rclcpp::ok() && node->getCurrentState().armed) {
+                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 2000, "TASK 2: still armed, z=%.2f m", node->getCurrentLocalPose().pose.position.z);
+                rclcpp::spin_some(node);
+                rate.sleep();
+            }
+            RCLCPP_INFO(node->get_logger(), "TASK 2: TAKING OFF.... %.2f meters...", takeoff_altitude);
+            takeoff(node, rate, posee, takeoff_altitude, false);
+            holdPosition(node, rate, posee, hold_time);
+        }   // task 2 only: already took off at the start
         RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
         pubCommand(node, "UAV-GO:VISION-TARGET", order_topic);
         clearMission(node);
