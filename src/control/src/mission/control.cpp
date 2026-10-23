@@ -261,6 +261,17 @@ int main(int argc, char **argv) {
     // ============================== TASK 2 ======================================
     if (use_task_2) {
         setTask(node, TASK_INFRA_SURVEY_REPAIR);
+        if (use_task_1) {   // task 1 ended with RTL: wait for the landing (ArduPilot disarms), then take off again
+            RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR RTL LANDING (disarm)...");
+            while (rclcpp::ok() && node->getCurrentState().armed) {
+                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 2000, "TASK 2: still armed, z=%.2f m", node->getCurrentLocalPose().pose.position.z);
+                rclcpp::spin_some(node);
+                rate.sleep();
+            }
+            RCLCPP_INFO(node->get_logger(), "TASK 2: TAKING OFF.... %.2f meters...", takeoff_altitude);
+            takeoff(node, rate, posee, takeoff_altitude, false);
+            holdPosition(node, rate, posee, hold_time);
+        }   // task 2 only: already took off at the start
         RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
         pubCommand(node, "UAV-GO:VISION-TARGET", order_topic);
         clearMission(node);
