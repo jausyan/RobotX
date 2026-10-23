@@ -262,18 +262,24 @@ int main(int argc, char **argv) {
     // ============================== TASK 2 ======================================
     if (use_task_2) {
         setTask(node, TASK_INFRA_SURVEY_REPAIR);
-        if (use_task_1) {   // task 1 ended with RTL: wait for the landing (ArduPilot disarms), then take off again
+        if (use_task_1) {   // task 1 ended with RTL: wait for the landing (disarm), the UAV-GO:<TIN>:<CIRCLE> order, then take off
             RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR RTL LANDING (disarm)...");
             while (rclcpp::ok() && node->getCurrentState().armed) {
                 RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 2000, "TASK 2: still armed, z=%.2f m", node->getCurrentLocalPose().pose.position.z);
                 rclcpp::spin_some(node);
                 rate.sleep();
             }
+            RCLCPP_INFO(node->get_logger(), "TASK 2: ON THE GROUND, WAITING FOR UAV-GO:<TIN>:<CIRCLE>...");
+            if (!waitCommand(node, "UAV-GO:", order_topic, run_start_timeout, false, &command)) {
+                RCLCPP_ERROR(node->get_logger(), "=========== NO UAV-GO ORDER, ABORT (drone not armed) ===========");
+                rclcpp::shutdown();
+                return 1;
+            }
             RCLCPP_INFO(node->get_logger(), "TASK 2: TAKING OFF.... %.2f meters...", takeoff_altitude);
             takeoff(node, rate, posee, takeoff_altitude, false);
             holdPosition(node, rate, posee, hold_time);
-        }   // task 2 only: already took off at the start
-        RCLCPP_INFO(node->get_logger(), "TASK 2: WAITING FOR ORDER...");
+        }   // task 2 only: order received and took off at the start
+        RCLCPP_INFO(node->get_logger(), "TASK 2: FLY TO SURVEY POINT (order %s)", command.c_str());
         pubCommand(node, "UAV-GO:VISION-TARGET", order_topic);
         clearMission(node);
         pushMission(node, {create_waypoint(survey_lat[1], survey_lon[1], takeoff_altitude)});
@@ -281,7 +287,6 @@ int main(int argc, char **argv) {
         waitForWP(node, rate, 1);
         setMode(node, rate, "GUIDED");
         holdPosition(node, rate, posee, hold_time);
-        if (!start_task_2) waitCommand(node, "UAV-GO:", order_topic, command_timeout, true, &command);   // start_task_2: order already received on the ground
         order = parseCommand(command);
         target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
         RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s --> %s", order.circle.c_str(), target.c_str());
