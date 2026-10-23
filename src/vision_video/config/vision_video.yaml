@@ -52,5 +52,5 @@ vision_video_node:
     use_openvino: true
     openvino_device: "NPU"
     openvino_model_path: ""
-    class_names: ["buoy_blue", "buoy_green", "buoy_red"]   # V6.onnx  (V7.onnx: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"])
+    class_names: ["buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"]   # V8_720.onnx  (V6.onnx: ["buoy_blue", "buoy_green", "buoy_red"])  (V7.onnx: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"])
 
