@@ -37,10 +37,6 @@ float hover_roll;
 float centering_tolerance_first;
 float centering_tolerance_second;
 std::string recovery_method;
-std::string tin_recovery_method;
-int tin_lost_frames;
-int tin_gps_median_n;
-float tin_gps_center_ratio;
 int channel_red;
 int channel_green;
 int channel_blue;
@@ -104,10 +100,6 @@ int main(int argc, char **argv) {
     node->declare_parameter<float>("centering_red.centering_tolerance_second", 0.20);
     node->declare_parameter<float>("centering_red.centering_tolerance", 0.15);
     node->declare_parameter<std::string>("centering_red.recovery_method", "local_pose");
-    node->declare_parameter<std::string>("centering_tin.recovery_method", "gps");
-    node->declare_parameter<int>("centering_tin.lost_frames", 10);
-    node->declare_parameter<int>("centering_tin.gps_median_n", 10);
-    node->declare_parameter<float>("centering_tin.gps_center_ratio", 0.3);
     node->declare_parameter<int>("servo.channel_red", 9);
     node->declare_parameter<int>("servo.channel_green", 10);
     node->declare_parameter<int>("servo.channel_blue", 11);
@@ -155,10 +147,6 @@ int main(int argc, char **argv) {
     node->get_parameter("centering_red.centering_tolerance_first", centering_tolerance_first);
     node->get_parameter("centering_red.centering_tolerance_second", centering_tolerance_second);
     node->get_parameter("centering_red.recovery_method", recovery_method);
-    node->get_parameter("centering_tin.recovery_method", tin_recovery_method);
-    node->get_parameter("centering_tin.lost_frames", tin_lost_frames);
-    node->get_parameter("centering_tin.gps_median_n", tin_gps_median_n);
-    node->get_parameter("centering_tin.gps_center_ratio", tin_gps_center_ratio);
     node->get_parameter("servo.channel_red", channel_red);
     node->get_parameter("servo.channel_green", channel_green);
     node->get_parameter("servo.channel_blue", channel_blue);
@@ -331,9 +319,9 @@ int main(int argc, char **argv) {
         RCLCPP_INFO(node->get_logger(), "TASK 3: TIN %s --> %s", order.tin.c_str(), target.c_str());
         holdPosition(node, rate, posee, hold_time);
 
-        centering_tin(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, tin_recovery_method, centering_tolerance_first, target_topic_prefix + target, tin_lost_frames, tin_gps_median_n, tin_gps_center_ratio);
+        centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
         fix_alt(node, rate, posee, drop_alt, alt_step);
-        centering_tin(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, tin_recovery_method, centering_tolerance_second, target_topic_prefix + target, tin_lost_frames, tin_gps_median_n, tin_gps_center_ratio);
+        centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);
         if (centered) {
             channel = order.tin == "green" ? channel_green : order.tin == "blue" ? channel_blue : channel_red;
             controlServoRepeated(node, channel, servo_tutup, signal_repeat);
