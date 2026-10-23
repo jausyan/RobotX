@@ -1,4 +1,5 @@
 #include "control_.hpp"
+#include <deque>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <cstring>
 #include <algorithm>
@@ -1362,7 +1363,7 @@ void waitForPosition(const std::shared_ptr<DroneController>&node, rclcpp::Rate &
     }
 }
 
-void sendGlobalRaw(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float latt, float lonn, float altt, bool allow_centering, float center_dist, float tolerance) {
+void sendGlobalRaw(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, double latt, double lonn, float altt, bool allow_centering, float center_dist, float tolerance) {
     /**
      * Send a raw global position target to the drone and wait until the drone reaches the target position.
      * 
@@ -2326,7 +2327,8 @@ void centering_red(
     float hover_roll,
     std::string recovery_method,
     float centering_tolerance,
-    std::string topic)
+    std::string topic,
+    const std::string &detections_topic)
 {
     (void)x; (void)y; 
     RCLCPP_INFO(node->get_logger(), "=== Starting RED Centering (PnP Meters) ===");
@@ -2349,6 +2351,26 @@ void centering_red(
     bool have_nonzero = false;
     geometry_msgs::msg::PoseStamped hold_pose = node->getCurrentLocalPose();
     const float locked_yaw_red = getHeading(hold_pose.pose.orientation);
+    // recovery_method "gps": first GPS fix of this class from vision_geo, flown to with sendGlobalRaw() when lost
+    const std::string label = topic.substr(topic.rfind('/') + 1);   // "/vision_geo/target/circle_red" -> "circle_red"
+    const float hold_rel_alt = static_cast<float>(node->getCurrentRelAlt().data);
+    double first_lat = 0.0, first_lon = 0.0;
+    bool have_gps = false;
+    rclcpp::Subscription<vision_msgs::msg::DetectedObjectArray>::SharedPtr det_sub;
+    if (recovery_method == "gps") {
+        det_sub = node->create_subscription<vision_msgs::msg::DetectedObjectArray>(detections_topic, 10,
+            [&](const vision_msgs::msg::DetectedObjectArray::SharedPtr msg) {
+                if (have_gps) return;
+                for (const auto &obj : msg->objects) {
+                    if (obj.label != label || (obj.latitude == 0.0 && obj.longitude == 0.0)) continue;
+                    first_lat = obj.latitude;
+                    first_lon = obj.longitude;
+                    have_gps = true;
+                    RCLCPP_INFO(node->get_logger(), "%s first GPS: %.7f, %.7f (recovery point)", label.c_str(), first_lat, first_lon);
+                    break;
+                }
+            });
+    }
     auto make_vel_yaw_cmd_red = [&](float vx, float vy, float vz) {
         mavros_msgs::msg::PositionTarget pt;
         pt.header.stamp    = node->now();
@@ -2459,6 +2481,10 @@ void centering_red(
                 target.orientation = drone_at_detection.pose.orientation;
                 moveToPoint(node, rate, drone_at_detection, target, 0.8, 0.1, false, false, false, false);
                 hold_pose = node->getCurrentLocalPose();
+            } else if (recovery_method == "gps" && have_gps) {
+                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000, "Lost, returning to first GPS of %s...", label.c_str());
+                sendGlobalRaw(node, rate, hold_pose, first_lat, first_lon, hold_rel_alt, false, 5.0, 0.00001);   // ~1 m: back in view is enough
+                hold_pose = node->getCurrentLocalPose();
             }
             hold_pose.header.stamp = node->now();
             hold_pose.header.frame_id = "map";
@@ -2470,6 +2496,258 @@ void centering_red(
     }
     node->publishLocalVelocity(zero(velocity_msg));
     RCLCPP_INFO(node->get_logger(), "CENTERING FINISHH..!!. Status: %s", status ? "SUCCESS" : "FAILED");
+}
+
+namespace {
+// tin GPS readings taken near the crosshair, per class, kept across centering_tin() calls
+std::map<std::string, std::deque<std::pair<double, double>>> tin_gps_memory;
+}
+
+void centering_tin(
+    const std::shared_ptr<DroneController>& node,
+    rclcpp::Rate &rate,
+    float speed_xy,
+    bool &status,
+    float acc,
+    float maxAccel,
+    float x,
+    float y,
+    float min_center_time,
+    float max_center_pitch,
+    float max_center_roll,
+    float hover_pitch,
+    float hover_roll,
+    std::string recovery_method,
+    float centering_tolerance,
+    std::string topic,
+    int lost_frames,
+    int gps_median_n,
+    float gps_center_ratio,
+    const std::string &detections_topic)
+{
+    (void)x; (void)y; (void)min_center_time; (void)max_center_pitch; (void)max_center_roll;
+    RCLCPP_INFO(node->get_logger(), "=== Starting TIN Centering (PnP Meters) ===");
+    RCLCPP_INFO(node->get_logger(), "Topic: %s | Deadband (acc): %.3fm, Finish Tolerance: %.3fm, lost after %d frames, recovery: %s",
+        topic.c_str(), acc, centering_tolerance, lost_frames, recovery_method.c_str());
+    status = false;
+    const std::string label = topic.substr(topic.rfind('/') + 1);   // "/vision_geo/target/tin_red" -> "tin_red"
+
+    // missed = zero frames in a row, counted per camera frame (callback), not per control tick
+    geometry_msgs::msg::PoseStamped::SharedPtr latest_tin = nullptr;
+    int missed = lost_frames;   // not seen yet = lost
+    auto tin_sub = node->create_subscription<geometry_msgs::msg::PoseStamped>(topic, 10,
+        [&](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+            if (msg->pose.position.x != 0.0 || msg->pose.position.y != 0.0) {
+                latest_tin = msg;
+                missed = 0;
+            } else if (missed < lost_frames) {
+                missed++;
+            }
+        });
+
+    // GPS of this tin while it is near the crosshair (edge projection is the least accurate), median of the last N
+    auto &gps_hist = tin_gps_memory[label];
+    const size_t gps_n = static_cast<size_t>(std::max(1, gps_median_n));
+    rclcpp::Subscription<vision_msgs::msg::DetectedObjectArray>::SharedPtr det_sub;
+    if (recovery_method == "gps") {
+        det_sub = node->create_subscription<vision_msgs::msg::DetectedObjectArray>(detections_topic, 10,
+            [&](const vision_msgs::msg::DetectedObjectArray::SharedPtr msg) {
+                if (missed != 0 || !latest_tin) return;
+                const auto &p = latest_tin->pose.position;
+                if (p.z <= 0.0 || std::hypot(p.x, p.y) > gps_center_ratio * p.z) return;
+                for (const auto &obj : msg->objects) {
+                    if (obj.label != label || (obj.latitude == 0.0 && obj.longitude == 0.0)) continue;
+                    gps_hist.emplace_back(obj.latitude, obj.longitude);
+                    while (gps_hist.size() > gps_n) gps_hist.pop_front();
+                    break;
+                }
+            });
+    }
+    auto gpsMedian = [&](double &lat, double &lon) {
+        if (gps_hist.empty()) return false;
+        std::vector<double> lats, lons;
+        for (const auto &g : gps_hist) { lats.push_back(g.first); lons.push_back(g.second); }
+        std::nth_element(lats.begin(), lats.begin() + lats.size() / 2, lats.end());
+        std::nth_element(lons.begin(), lons.begin() + lons.size() / 2, lons.end());
+        lat = lats[lats.size() / 2];
+        lon = lons[lons.size() / 2];
+        return true;
+    };
+
+    auto last_detected_time = node->now();
+    geometry_msgs::msg::TwistStamped velocity_msg;
+    geometry_msgs::msg::TwistStamped last_vel;
+    geometry_msgs::msg::Point error_p, last_error, error_d;
+    bool have_last_error = false;
+    const float Kp = 2.5f;
+    const float Kd = 0.01f;
+    const float min_velocity = 0.05f;  // [m/s]
+    const float gap_decay = 0.5f;      // velocity kept per tick while only a few frames are missing
+    geometry_msgs::msg::PoseStamped last_nonzero_tin;
+    geometry_msgs::msg::PoseStamped drone_at_detection;
+    bool have_nonzero = false;
+    bool was_lost = false;
+    geometry_msgs::msg::PoseStamped hold_pose = node->getCurrentLocalPose();
+    const float hold_rel_alt = static_cast<float>(node->getCurrentRelAlt().data);
+    const float locked_yaw_tin = getHeading(hold_pose.pose.orientation);
+    auto make_vel_yaw_cmd_tin = [&](float vx, float vy, float vz) {
+        mavros_msgs::msg::PositionTarget pt;
+        pt.header.stamp    = node->now();
+        pt.header.frame_id = "map";
+        pt.coordinate_frame = mavros_msgs::msg::PositionTarget::FRAME_LOCAL_NED;
+        pt.type_mask =
+            mavros_msgs::msg::PositionTarget::IGNORE_PX  |
+            mavros_msgs::msg::PositionTarget::IGNORE_PY  |
+            mavros_msgs::msg::PositionTarget::IGNORE_PZ  |
+            mavros_msgs::msg::PositionTarget::IGNORE_AFX |
+            mavros_msgs::msg::PositionTarget::IGNORE_AFY |
+            mavros_msgs::msg::PositionTarget::IGNORE_AFZ |
+            mavros_msgs::msg::PositionTarget::IGNORE_YAW_RATE;
+        pt.velocity.x = vx;
+        pt.velocity.y = vy;
+        pt.velocity.z = vz;
+        pt.yaw = locked_yaw_tin;
+        return pt;
+    };
+    auto holdZ = [&]() {
+        float current_z = node->getCurrentLocalPose().pose.position.z;
+        return std::max(-0.3f, std::min(0.3f, 1.0f * (static_cast<float>(hold_pose.pose.position.z) - current_z)));
+    };
+
+    while (rclcpp::ok()) {
+        if (missed == 0 && latest_tin) {
+            // ---- tin in this frame: same controller as centering_red()
+            was_lost = false;
+            last_detected_time = node->now();
+            last_nonzero_tin = *latest_tin;
+            drone_at_detection = node->getCurrentLocalPose();
+            have_nonzero = true;
+            error_p.x = -latest_tin->pose.position.y;
+            error_p.y = -latest_tin->pose.position.x;
+            if (have_last_error) {
+                error_d.x = (error_p.x - last_error.x) * RATE;
+                error_d.y = (error_p.y - last_error.y) * RATE;
+            } else {
+                error_d.x = 0; error_d.y = 0;
+                have_last_error = true;
+            }
+            last_error = error_p;
+            float dist_xy = std::hypot(error_p.x, error_p.y);
+            float scale = (dist_xy > 1e-6f) ? std::min(1.0f, dist_xy / std::max(acc, 1e-6f)) : 0.0f;
+            float cmd_forward = Kd * error_d.x + scale * Kp * error_p.x;
+            float cmd_left    = Kd * error_d.y + scale * Kp * error_p.y;
+            {
+                geometry_msgs::msg::Point cmd_body;
+                cmd_body.x = cmd_forward;
+                cmd_body.y = cmd_left;
+                float heading = getHeading(node->getCurrentLocalPose().pose.orientation);
+                auto cmd_enu = rotatePoint(cmd_body, heading);
+                velocity_msg.twist.linear.x = static_cast<float>(cmd_enu.x);
+                velocity_msg.twist.linear.y = static_cast<float>(cmd_enu.y);
+            }
+            velocity_msg.twist.linear.z = 0.0;
+            velocity_msg = limitDelta(maxAccel / RATE, velocity_msg, last_vel);
+            velocity_msg = limit(speed_xy, velocity_msg);
+            {
+                float h = std::hypot(velocity_msg.twist.linear.x, velocity_msg.twist.linear.y);
+                if (h > 1e-6f && h < min_velocity && dist_xy > centering_tolerance) {
+                    float s = min_velocity / h;
+                    velocity_msg.twist.linear.x *= s;
+                    velocity_msg.twist.linear.y *= s;
+                }
+            }
+            const float vz_tin = holdZ();
+            velocity_msg.twist.linear.z = vz_tin;
+            if (dist_xy <= centering_tolerance) {
+                RCLCPP_INFO(node->get_logger(), "++++++++++++ TIN CENTERED! (%.3fm <= %.3fm) ++++++++++++", dist_xy, centering_tolerance);
+                hold_pose = node->getCurrentLocalPose();
+                hold_pose.header.stamp = node->now();
+                hold_pose.header.frame_id = "map";
+                node->publishLocalPosition(hold_pose);
+                status = true;
+                break;
+            }
+            node->publishSetpointRawLocal(
+                make_vel_yaw_cmd_tin(velocity_msg.twist.linear.x, velocity_msg.twist.linear.y, vz_tin));
+            last_vel = velocity_msg;
+
+            float roll = std::abs(getRoll(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_roll;
+            float pitch = std::abs(getPitch(node->getCurrentLocalPose().pose.orientation) * 180.0 / M_PI) - hover_pitch;
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "TIN CENTERING: dist=%.3f, roll=%.1f, pitch=%.1f, gps=%zu", dist_xy, roll, pitch, gps_hist.size());
+        } else if (missed < lost_frames && have_last_error) {
+            // ---- a few frames missing: keep the controller state, ease off the last velocity
+            velocity_msg.twist.linear.x = last_vel.twist.linear.x * gap_decay;
+            velocity_msg.twist.linear.y = last_vel.twist.linear.y * gap_decay;
+            const float vz_tin = holdZ();
+            velocity_msg.twist.linear.z = vz_tin;
+            node->publishSetpointRawLocal(
+                make_vel_yaw_cmd_tin(velocity_msg.twist.linear.x, velocity_msg.twist.linear.y, vz_tin));
+            last_vel = velocity_msg;
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 500, "TIN gap: %d/%d frames missing", missed, lost_frames);
+        } else {
+            // ---- lost: non-blocking recovery, back to vision as soon as the tin is in a frame again
+            have_last_error = false;
+            last_vel = zero(last_vel);   // ramp up smoothly on reacquire
+            if (!was_lost) {
+                was_lost = true;
+                const double z = hold_pose.pose.position.z;
+                hold_pose = node->getCurrentLocalPose();   // hold here if there is nothing to recover to
+                hold_pose.pose.position.z = z;
+            }
+            auto time_lost = (node->now() - last_detected_time).seconds();
+            if (time_lost > 30.0) {
+                RCLCPP_WARN(node->get_logger(), "TIN lost > 30s, aborting.");
+                break;
+            }
+
+            double lat = 0.0, lon = 0.0;
+            if (recovery_method == "gps" && gpsMedian(lat, lon)) {
+                mavros_msgs::msg::GlobalPositionTarget raw;
+                raw.header.stamp = node->now();
+                raw.header.frame_id = "map";
+                raw.coordinate_frame = mavros_msgs::msg::GlobalPositionTarget::FRAME_GLOBAL_REL_ALT;
+                raw.type_mask =
+                    mavros_msgs::msg::GlobalPositionTarget::IGNORE_VX |
+                    mavros_msgs::msg::GlobalPositionTarget::IGNORE_VY |
+                    mavros_msgs::msg::GlobalPositionTarget::IGNORE_VZ |
+                    mavros_msgs::msg::GlobalPositionTarget::IGNORE_AFX |
+                    mavros_msgs::msg::GlobalPositionTarget::IGNORE_AFY |
+                    mavros_msgs::msg::GlobalPositionTarget::IGNORE_AFZ |
+                    mavros_msgs::msg::GlobalPositionTarget::IGNORE_YAW_RATE;
+                raw.latitude = lat;
+                raw.longitude = lon;
+                raw.altitude = hold_rel_alt;
+                raw.yaw = locked_yaw_tin;
+                node->publishSetpointRawGlobal(raw);
+                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
+                    "TIN lost (%.1fs), returning to GPS median %.7f, %.7f (%zu readings)", time_lost, lat, lon, gps_hist.size());
+            } else if (have_nonzero) {
+                geometry_msgs::msg::Point tin_error_body;
+                tin_error_body.x = -last_nonzero_tin.pose.position.y;
+                tin_error_body.y = -last_nonzero_tin.pose.position.x;
+                float heading = getHeading(drone_at_detection.pose.orientation);
+                geometry_msgs::msg::PoseStamped target;
+                target.header.stamp = node->now();
+                target.header.frame_id = "map";
+                target.pose.position = drone_at_detection.pose.position + rotatePoint(tin_error_body, heading);
+                target.pose.position.z = hold_pose.pose.position.z;
+                target.pose.orientation = drone_at_detection.pose.orientation;
+                node->publishLocalPosition(target);
+                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
+                    "TIN lost (%.1fs), returning to last seen spot (%.2f, %.2f)", time_lost, target.pose.position.x, target.pose.position.y);
+            } else {
+                hold_pose.header.stamp = node->now();
+                hold_pose.header.frame_id = "map";
+                node->publishLocalPosition(hold_pose);
+                RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
+                    "TIN not detected (%.1fs), holding at (%.2f, %.2f, %.2f)", time_lost, hold_pose.pose.position.x, hold_pose.pose.position.y, hold_pose.pose.position.z);
+            }
+        }
+        rclcpp::spin_some(node);
+        rate.sleep();
+    }
+    node->publishLocalVelocity(zero(velocity_msg));
+    RCLCPP_INFO(node->get_logger(), "TIN CENTERING FINISH. Status: %s", status ? "SUCCESS" : "FAILED");
 }
 
 namespace {
