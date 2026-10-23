@@ -80,11 +80,17 @@
       max_center_roll: 2.5
       hover_pitch: 0.0
       hover_roll: 0.0
-      recovery_method: "local_pose"
+      recovery_method: "local_pose"         # "local_pose": moveToPoint() to the last seen spot | "gps": sendGlobalRaw() to the first seen GPS (vision_geo)
       centering_tolerance_first: 0.10 
       centering_tolerance_second: 0.08        
       hold_kp: 1.2
       detect_timeout: 0.4 
+
+    centering_tin:                          # centering_tin() (tins), not used by control.cpp yet: same gains / tolerances as centering_red
+      recovery_method: "gps"                # "gps": median GPS near the crosshair (falls back to local_pose before the first fix) | "local_pose"
+      lost_frames: 10                       # zero frames in a row before the tin counts as lost (~0.35 s at 30 FPS)
+      gps_median_n: 10                      # GPS readings kept for the median
+      gps_center_ratio: 0.3                 # take GPS only while hypot(x, y) <= ratio * z (near the crosshair)
 
     servo:                         
       channel_red: 9               

@@ -38,6 +38,7 @@
 #include <iostream>
 #include <iomanip>
 #include <limits>
+#include <vision_msgs/msg/detected_object_array.hpp>
 
 #define RATE 10.0
 
@@ -284,7 +285,7 @@ void waitForPosition(const std::shared_ptr<DroneController>&node, rclcpp::Rate &
      */
     
 
-void sendGlobalRaw(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, float latt, float lonn, float altt, bool allow_centering = false, float center_dist = 5.0, float tolerance = 0.0000025);
+void sendGlobalRaw(const std::shared_ptr<DroneController>&node, rclcpp::Rate &rate, geometry_msgs::msg::PoseStamped &posee, double latt, double lonn, float altt, bool allow_centering = false, float center_dist = 5.0, float tolerance = 0.0000025);
     /**
      * Send a raw global position target to the drone and wait until the drone reaches the target position.
      * 
@@ -457,9 +458,34 @@ void centering_red(
     float max_center_roll = 2.5,
     float hover_pitch = 0.0,
     float hover_roll = 0.0,
-    std::string recovery_method = "local_pose",
+    std::string recovery_method = "local_pose",   // "local_pose": moveToPoint() to the last seen spot | "gps": sendGlobalRaw() to the first seen GPS
     float centering_tolerance = 0.20,
-    std::string topic = "/vision/red");
+    std::string topic = "/vision/red",
+    const std::string &detections_topic = "/vision_geo/detections");   // vision_geo GPS per detection (recovery_method "gps")
+
+// centering_red() for small objects (tins): lost only after lost_frames zero frames in a row, eases off during
+// short gaps, recovers (non-blocking) to the median GPS seen near the crosshair (kept per class across calls)
+void centering_tin(
+    const std::shared_ptr<DroneController>&node,
+    rclcpp::Rate &rate,
+    float speed_xy,
+    bool &status,
+    float acc,
+    float maxAccel,
+    float x = 1.0,
+    float y = 0.0,
+    float min_center_time = 0.01,
+    float max_center_pitch = 2.5,
+    float max_center_roll = 2.5,
+    float hover_pitch = 0.0,
+    float hover_roll = 0.0,
+    std::string recovery_method = "gps",         // "gps": median GPS, falls back to local_pose before the first fix | "local_pose"
+    float centering_tolerance = 0.20,
+    std::string topic = "/vision_geo/target/tin_red",
+    int lost_frames = 10,                         // zero frames in a row before the tin counts as lost (~0.35 s at 30 FPS)
+    int gps_median_n = 10,                        // GPS readings kept for the median
+    float gps_center_ratio = 0.3,                 // take GPS only while hypot(x, y) <= ratio * z (near the crosshair)
+    const std::string &detections_topic = "/vision_geo/detections");
 
 struct MissionOrder {
     std::string tin;     // 1st color, lowercase: which tin to drop  ("red"/"green"/"blue", empty if not sent)

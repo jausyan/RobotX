@@ -23,12 +23,13 @@ find_package(mavros_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(vision_msgs REQUIRED)
 
 add_executable(control src/mission/control.cpp ${projectLibSources})
-ament_target_dependencies(control rclcpp std_msgs geometry_msgs sensor_msgs mavros_msgs std_srvs)
+ament_target_dependencies(control rclcpp std_msgs geometry_msgs sensor_msgs mavros_msgs std_srvs vision_msgs)
 
 add_executable(testing src/mission/testing.cpp ${projectLibSources})
-ament_target_dependencies(testing rclcpp std_msgs geometry_msgs sensor_msgs mavros_msgs std_srvs)
+ament_target_dependencies(testing rclcpp std_msgs geometry_msgs sensor_msgs mavros_msgs std_srvs vision_msgs)
 
 install(TARGETS
   control
