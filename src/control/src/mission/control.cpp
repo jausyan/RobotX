@@ -252,6 +252,7 @@ int main(int argc, char **argv) {
         holdPosition(node, rate, posee, 1.0);
         pubCommand(node, "UAV-GO:VISION-MAP", order_topic);
         waitCommand(node, "MISSION-DONE", "/mission/order", 300.0, true);
+        pubCommand(node, "MISSION-DONE", order_topic);
         setMode(node, rate, "rtl");
         setTask(node, TASK_NONE);
     } else {
@@ -287,16 +288,17 @@ int main(int argc, char **argv) {
         setMode(node, rate, "GUIDED");
         holdPosition(node, rate, posee, hold_time);
         order = parseCommand(command);
-        target = "circle_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
+        target = "tin_" + order.circle;   // UAV-GO:<TIN>:<CIRCLE>
         RCLCPP_INFO(node->get_logger(), "TASK 2: CIRCLE %s --> %s", order.circle.c_str(), target.c_str());
         fix_alt(node, rate, posee, approach_alt, alt_step);
+        LocalMove(node, rate, posee, 1.0, 0.0, 0.0, 0.0, 0.3, false);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_first, target_topic_prefix + target);
         fix_alt_range(node, rate, posee, centering_alt_2, alt_step, 0.3, 30.0);
         centering_red(node, rate, speed_xy, centered, acc, maxAccel, X, Y, min_center_time, max_center_pitch, max_center_roll, hover_pitch, hover_roll, recovery_method, centering_tolerance_second, target_topic_prefix + target);
         fix_alt_range(node, rate, posee, centering_alt_3, alt_step, 0.3, 30.0);
         if (centered) {
-            controlServoRepeated(node, 1, servo_buka, signal_repeat);
-            holdPosition(node, rate, posee, hold_time);
+            controlServoRepeated(node, 1, servo_tutup, signal_repeat);
+            holdPosition(node, rate, posee, 2.0);
         } else {
             RCLCPP_ERROR(node->get_logger(), "TASK 2: CENTERING FAILED - SKIP DROP..!!");
         }

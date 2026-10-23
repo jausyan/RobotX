@@ -24,7 +24,7 @@
       takeoff_altitude: 15.0
       hold_time: 1.0
 
-      use_task_1: true
+      use_task_1: false
       use_task_2: true
       use_task_3: false
 
@@ -34,21 +34,21 @@
       geofence_lat: [0.0]          
       geofence_lon: [0.0]
 
-      survey_lat: [-7.2864076, -7.2863081, -7.2863818, -7.2862840] 
-      survey_lon: [112.7960508, 112.7961492, 112.7960302, 112.796149]
+      survey_lat: [ -7.2864564, -7.286343, -7.2863818, -7.2862840] 
+      survey_lon: [ 112.7960478, 112.7961561, 112.7960302, 112.796149]
       survey_alt: 20.0             
       survey_time: 600.0            
 
       # Task 2 & 3: delivery
       usv_alt: 15.0               
-      approach_alt: 1.0          
+      approach_alt: 0.0 #1.0          
       drop_alt: 2.0
       alt_step: 0.5               # fix_alt / fix_alt_range: m per step (smaller = slower, safer descend; 0 = one go)
 
     rangefinder_param:
       centering_alt_1: 4.0
       centering_alt_2: 1.2
-      centering_alt_3: 0.8
+      centering_alt_3: 0.0 #0.3 #0.8
 
     communication:
       order_topic: "/mission/order"                 
@@ -81,8 +81,8 @@
       hover_pitch: 0.0
       hover_roll: 0.0
       recovery_method: "local_pose"
-      centering_tolerance_first: 0.05 
-      centering_tolerance_second: 0.05        
+      centering_tolerance_first: 0.10 
+      centering_tolerance_second: 0.08        
       hold_kp: 1.2
       detect_timeout: 0.4 
 

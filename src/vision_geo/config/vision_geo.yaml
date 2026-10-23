@@ -30,7 +30,8 @@ vision_geo_node:
     openvino_model_path: ""        
     # class_names:   ["buoy_red", "buoy_blue", "circle_blue", "buoy_green", "circle_green", "buoy_black", "circle_red"]
     # class_names:   ["buoy_blue", "buoy_green", "buoy_red", "buoy_green", "circle_green", "circle_blue", "circle_red"]
-    class_names: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"]
+    # class_names: ["blue_circle", "buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"]
+    class_names: ["buoy_blue", "buoy_green", "buoy_red", "buoy_unknown", "circle_blue", "circle_green", "circle_red", "tin_blue", "tin_green", "tin_red"]
     object_size_m: [0.4,        0.4,          0.4,         0.4,        0.65,         0.65,           0.65]  
     gps_topic:     "/rian/global_position/global"     
     pose_topic:    "/rian/local_position/pose"
@@ -84,4 +85,4 @@ vision_geo_node:
     offset_y_m: 0.0                 
     offset_z_m: 0.0
     crosshair_offset_x_px: 0          # [px] moves the vertical crosshair line (+ = right); the target pose is measured from the crosshair
-    crosshair_offset_y_px: 190       
+    crosshair_offset_y_px: 150       

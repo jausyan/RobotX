@@ -2457,7 +2457,7 @@ void centering_red(
                 target.position = red_pos_global;
                 target.position.z = node->getCurrentLocalPose().pose.position.z;
                 target.orientation = drone_at_detection.pose.orientation;
-                moveToPoint(node, rate, drone_at_detection, target, 0.8, 0.1, false, false, false, false);
+                moveToPoint(node, rate, drone_at_detection, target, 0.3, 0.3, false, false, false, false);
                 hold_pose = node->getCurrentLocalPose();
             }
             hold_pose.header.stamp = node->now();
